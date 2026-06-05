@@ -9,6 +9,8 @@ import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row } from '@/components/ui/Card';
 import { T } from '@/components/ui/T';
+import { AIThinking } from '@/components/ui/Pulse';
+import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { api, ApiError } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
 import { useTheme } from '@/lib/theme';
@@ -37,6 +39,13 @@ export default function Upload() {
   const router = useRouter();
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
+  // Separate flag for "request actually in flight". `busy` flips on
+  // before the OS picker opens so the chosen card can fade, but we don't
+  // want the spinner overlay during the picker (which itself is modal).
+  // `uploading` only turns on after the file is picked and the network
+  // call starts, so the overlay covers exactly the dead-air window
+  // between "PDF selected" and "first server response."
+  const [uploading, setUploading] = useState(false);
 
   // After a new doc is created, invalidate the dashboard and library list caches
   // so the next visit to Home / Library shows the new row without waiting for
@@ -63,6 +72,7 @@ export default function Upload() {
         name: file.name ?? 'document.pdf',
         type: 'application/pdf',
       } as any);
+      setUploading(true);
       await api.uploadDocument(form);
       bustDocListCaches();
       // Return the user to where they came from (Home or Library). The new
@@ -73,6 +83,7 @@ export default function Upload() {
       handleErr(e);
     } finally {
       setBusy(null);
+      setUploading(false);
     }
   }
 
@@ -95,6 +106,7 @@ export default function Upload() {
         name: a.fileName ?? `page.${(a.mimeType ?? 'image/jpeg').split('/')[1] ?? 'jpg'}`,
         type: a.mimeType ?? 'image/jpeg',
       } as any);
+      setUploading(true);
       await api.uploadDocument(form);
       bustDocListCaches();
       // Return the user to where they came from (Home or Library). The new
@@ -105,6 +117,7 @@ export default function Upload() {
       handleErr(e);
     } finally {
       setBusy(null);
+      setUploading(false);
     }
   }
 
@@ -117,6 +130,35 @@ export default function Upload() {
         <PickRow icon="camera-outline" title="Take a photo" sub="Snap a page of your notebook" onPress={() => sendImage(true)} busy={busy === 'camera'} />
         <PickRow icon="images-outline" title="Pick from library" sub="An image already on your phone" onPress={() => sendImage(false)} busy={busy === 'lib'} />
       </Screen>
+
+      {uploading ? (
+        // Absolute overlay covers the screen while the upload request is
+        // in flight. Without it the screen looks frozen between picker
+        // dismissal and the redirect back to Home/Library. Blocks taps
+        // through pointerEvents so the user can't double-fire an upload.
+        <View
+          pointerEvents="auto"
+          style={{
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: C.paper,
+            paddingHorizontal: 20,
+            paddingTop: 80,
+            gap: 16,
+          }}
+        >
+          <IndeterminateBar />
+          <AIThinking
+            title="Uploading your material"
+            tips={[
+              'Larger PDFs take longer to send. Stay on this screen.',
+              'After upload, Studae reads and indexes every page. We will keep you posted on the home screen.',
+              'Once ingested, lessons, tests, and Ask all run against this material.',
+              'You can keep using the app while Studae finishes indexing in the background.',
+            ]}
+          />
+        </View>
+      ) : null}
     </View>
   );
 }
