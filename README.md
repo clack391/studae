@@ -98,4 +98,4 @@ cd ../study-app-frontend && npm run typecheck # frontend TypeScript check
 
 ## License
 
-See [study-app-backend/LICENSE](study-app-backend/LICENSE).
+See [LICENSE](LICENSE). Copyright (c) 2026 Precious Onotu and Praise Enato. Proprietary; all rights reserved.
