@@ -28,9 +28,23 @@ export function MeBubble({ text }: { text: string }) {
 
 export function AiBubble({ text, sources }: { text: string; sources?: Source[] }) {
   const C = useTheme();
-  // Pull out any source chunks that have a real figure image so we can
-  // render them inline. Same component the lesson and test screens use.
-  const figureSources = (sources ?? []).filter((s) => !!s.figure_path);
+  // Split the source list. figureSources renders as inline images; the
+  // "from your material" card only shows entries with a real snippet so
+  // page-expansion supplements (figure-only rows with empty snippets)
+  // don't pile up as duplicate "page 7" rows in the citation list.
+  // Dedupe figures by figure_path so the same image doesn't render twice
+  // when multiple chunks happen to reference it.
+  const all = sources ?? [];
+  const seenFig = new Set<string>();
+  const figureSources = all
+    .filter((s) => !!s.figure_path)
+    .filter((s) => {
+      const p = s.figure_path as string;
+      if (seenFig.has(p)) return false;
+      seenFig.add(p);
+      return true;
+    });
+  const materialSources = all.filter((s) => !!s.snippet);
   return (
     <View
       style={{
@@ -54,7 +68,7 @@ export function AiBubble({ text, sources }: { text: string; sources?: Source[] }
           caption={s.page_number != null ? `page ${s.page_number}` : undefined}
         />
       ))}
-      {sources?.length ? <Sources items={sources} /> : null}
+      {materialSources.length ? <Sources items={materialSources} /> : null}
     </View>
   );
 }

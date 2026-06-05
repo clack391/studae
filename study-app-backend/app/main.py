@@ -302,7 +302,7 @@ def session_messages(
     Caller must own the session. limit capped at 1000."""
     require_session(session_id, user_id)
     rows = supabase.table("messages").select(
-        "id, role, content, image_path, created_at"
+        "id, role, content, image_path, metadata, created_at"
     ).eq("session_id", session_id).order("created_at") \
         .limit(min(max(limit, 1), 1000)).execute().data or []
     return {"messages": rows}

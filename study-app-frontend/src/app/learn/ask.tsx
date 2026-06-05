@@ -41,11 +41,17 @@ export default function Ask() {
   });
   useEffect(() => {
     if (history.data && !hydrated) {
+      // Restore sources from metadata for assistant turns. Backend saves
+      // {sources: [...]} on every /ask reply so figures and page citations
+      // round-trip across screen reloads. Older messages saved before the
+      // metadata write was added simply have metadata=null → no sources,
+      // just the text bubble.
       const seeded: Turn[] = history.data.messages
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
         .map((m) => ({
           role: m.role as 'user' | 'assistant',
           text: m.content as string,
+          sources: m.role === 'assistant' ? (m.metadata?.sources ?? undefined) : undefined,
         }));
       setTurns(seeded);
       setHydrated(true);

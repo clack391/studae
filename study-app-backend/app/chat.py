@@ -1,3 +1,4 @@
+import logging
 import re
 
 from fastapi import HTTPException
@@ -6,6 +7,8 @@ from .billing import LimitError, check_and_count
 from .clients import claude, STYLE_RULES, supabase
 from .ingest import embed, read_image
 from .permissions import require_session
+
+log = logging.getLogger(__name__)
 
 
 # Snippet cleaning shared by every callsite that returns sources to the UI.
@@ -99,12 +102,22 @@ def context_from(chunks):
     return "\n\n".join(c["content"] for c in chunks)
 
 
-def _sources_from_search(chunks, snippet_chars=200):
+def _sources_from_search(chunks, snippet_chars=200, document_id=None,
+                         user_id=None, expand_figures=False,
+                         topic_keywords=None):
     """Frontend-friendly sources from search_chunks output. Adds page_number
     and figure_path via a small lookup (the match_chunks RPC returns
     neither). Snippets are cleaned and chunks whose snippet ends up empty
     (TOC pages, form templates) are filtered out, unless they're a figure
-    source (the figure itself is the content)."""
+    source (the figure itself is the content).
+
+    When document_id is provided, the result is supplemented with every
+    other figure that lives on the same pages as the retrieved chunks.
+    This is what makes composite figures (e.g. an Anthracnose page with
+    four subfigures A/B/C/D attached to four different chunks) all
+    surface to the frontend, even though RAG only retrieved one of those
+    chunks by text similarity.
+    """
     if not chunks:
         return []
     ids = [c["id"] for c in chunks]
@@ -123,6 +136,54 @@ def _sources_from_search(chunks, snippet_chars=200):
             "figure_path": m.get("figure_path"),
             "snippet": snippet,
         })
+
+    # Keyword filter: drop sources whose snippet doesn't mention any of
+    # the question's content words, and drop TOC / index chunks even if
+    # they do (they list every topic in the doc by name and would
+    # otherwise always match). Applied BEFORE page-expansion so
+    # supplemental figures only get pulled from pages that actually match
+    # the topic (the supplements have empty snippets and would otherwise
+    # be filtered out themselves). If the filter would empty the list we
+    # fall back to the unfiltered set so we never strand the student with
+    # no citations.
+    if topic_keywords:
+        kept = [
+            s for s in sources
+            if any(kw in (s.get("snippet") or "").lower() for kw in topic_keywords)
+            and not _is_toc_snippet(s.get("snippet") or "")
+        ]
+        if kept:
+            sources = kept
+
+    if expand_figures and document_id and user_id and sources:
+        page_numbers = sorted({s["page_number"] for s in sources if s.get("page_number") is not None})
+        existing_paths = {s["figure_path"] for s in sources if s.get("figure_path")}
+        if page_numbers:
+            # Pull every chunk on the relevant pages. We filter for non-null
+            # figure_path in Python because supabase-py's `.not_.is_(...)`
+            # variant is unreliable across versions and silently returns no
+            # rows in some setups.
+            extras = supabase.table("chunks") \
+                .select("id, page_number, figure_path") \
+                .eq("document_id", document_id) \
+                .eq("user_id", user_id) \
+                .in_("page_number", page_numbers) \
+                .execute().data or []
+            for r in extras:
+                fp = r.get("figure_path")
+                if not fp or fp in existing_paths:
+                    continue
+                existing_paths.add(fp)
+                # Figure-only supplements: no snippet text since the figure
+                # is what matters. Frontend page-level filter still lets
+                # them through because they sit on pages already known to
+                # be topic-relevant.
+                sources.append({
+                    "chunk_id": r["id"],
+                    "page_number": r.get("page_number"),
+                    "figure_path": fp,
+                    "snippet": "",
+                })
     return sources
 
 
@@ -172,34 +233,233 @@ def answer_photo_question(user_id, session_id, document_id,
         messages=msgs,
     ).content[0].text
 
+    # /ask-photo: student handed over a photo and is asking about it.
+    # Always keep figure_paths in the sources here, since the question is
+    # implicitly visual.
+    sources = _sources_from_search(chunks, document_id=document_id, user_id=user_id)
+
     # Persist text-only versions for the chat transcript. We deliberately
     # do not re-store the image bytes in messages: subsequent turns rely on
     # the document chunks plus the student's typed follow-up, not on
-    # re-feeding the same photo every turn.
+    # re-feeding the same photo every turn. Sources are saved into
+    # metadata so the transcript can replay figures + page citations.
     supabase.table("messages").insert([
         {"session_id": session_id, "user_id": user_id,
          "role": "user", "content": f"[photo] {question}"},
         {"session_id": session_id, "user_id": user_id,
-         "role": "assistant", "content": reply},
+         "role": "assistant", "content": reply,
+         "metadata": {"sources": sources}},
     ]).execute()
 
-    return reply, _sources_from_search(chunks)
+    return reply, sources
+
+
+_TRIVIAL_GREETINGS = {
+    "hi", "hello", "hey", "yo", "sup", "hola", "howdy", "ok", "okay",
+    "k", "kk", "cool", "nice", "wow", "lol", "lmao", "thanks", "thank",
+    "ty", "thx", "ping", "test", "testing", "ready",
+}
+
+
+_IMAGE_SEEKING_PATTERNS = re.compile(
+    r"\b("
+    r"pictures?|images?|figures?|photos?|photographs?|diagrams?|"
+    r"illustrations?|drawings?|graphs?|charts?|visuals?|"
+    r"show( me)?|see|look(s)? like|looks like|looking like|appearance|"
+    r"what does (it|this|that) look"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+_STOPWORDS = {
+    # function words / common verbs
+    "the", "a", "an", "of", "to", "in", "on", "at", "by", "for", "with",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "and", "or", "but", "if", "then", "so", "than",
+    "as", "like", "about", "into", "from", "up", "down", "out", "off",
+    "over", "under", "again", "more", "some", "any", "every", "all",
+    "no", "not", "yes", "very", "just", "only", "also", "too",
+    # pronouns
+    "i", "you", "we", "they", "he", "she", "it", "me", "us", "him", "them",
+    "my", "your", "our", "their", "his", "her", "its", "this", "that",
+    "these", "those", "myself", "yourself", "ourselves", "themselves",
+    # question words / modals
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how",
+    "can", "could", "would", "should", "may", "might", "must", "shall", "will",
+    # image-seeking words (they're requests, not topics)
+    "show", "see", "look", "looks", "looking", "picture", "pictures",
+    "image", "images", "figure", "figures", "photo", "photos", "photograph",
+    "diagram", "diagrams", "illustration", "drawing", "graph", "chart",
+    "visual", "appearance", "tell", "explain", "describe", "list",
+    # generic study words
+    "thing", "things", "stuff", "topic", "lesson", "page", "material",
+    "study", "studying", "learn", "learning", "know", "knowing", "understand",
+}
+
+
+def _topic_keywords(question: str) -> list[str]:
+    """Pull content words out of the student's question for source filtering.
+    Drops stopwords, image-seeking words ("picture", "show", "see"), and
+    generic study words ("topic", "page", "lesson"). The remaining tokens
+    are the actual subject the student is asking about."""
+    words = re.findall(r"[a-z']+", (question or "").lower())
+    return [w for w in words if len(w) > 2 and w not in _STOPWORDS]
+
+
+_TOC_MARKERS = re.compile(
+    r"\b(contents page|table of contents|list of (figures|tables)|"
+    r"index page)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_toc_snippet(snippet: str) -> bool:
+    """True if the snippet is a Table of Contents / index page rather than
+    actual material. TOC pages mention every topic in the document by
+    name, so a keyword filter against "anthracnose" keeps the TOC even
+    though it's not real content. Detect by explicit markers ("CONTENTS
+    PAGE", "Table of Contents") or by a high density of trailing 2-3
+    digit page numbers, which is what a TOC line looks like once dot
+    leaders are stripped ("Anthracnose 02", "Black Sigatoka 03")."""
+    if not snippet:
+        return False
+    if _TOC_MARKERS.search(snippet):
+        return True
+    # Count tokens that look like TOC page-number trailers: a short number
+    # right after a word. >= 3 of these in a short snippet is TOC-ish.
+    trailers = re.findall(r"\b[A-Za-z][A-Za-z\-]+\s+\d{1,3}\b", snippet)
+    return len(trailers) >= 4
+
+
+def _wants_figures(text: str) -> bool:
+    """True when the student's question is clearly image-seeking. Used to
+    gate inline figure rendering in /ask. Source citations (page numbers,
+    snippets) still flow through either way so the student can navigate
+    the PDF on their own."""
+    if not text:
+        return False
+    return bool(_IMAGE_SEEKING_PATTERNS.search(text))
+
+
+# Conversational small-talk that isn't about the material. These bypass
+# RAG so we don't return random nearest-neighbour chunks just because
+# embeddings have to return something.
+_SMALL_TALK_PATTERNS = re.compile(
+    r"\b("
+    r"how (are|r) (you|u|ya)|how('s| is) it going|how('s| is) your day|"
+    r"how('s| is) everything|how('ve| have) you been|how do you do|"
+    r"what('s| is) up|whats up|wassup|what('s| is) new|"
+    r"good (morning|afternoon|evening|night|day)|"
+    r"have a (good|great|nice) (day|one|night)|"
+    r"nice to (meet|see) you|pleased to meet you|"
+    r"who are you|what are you|what can you do|what do you do|"
+    r"are you (there|a|an) (bot|ai|human|real)|are you ok"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_trivial_message(text: str) -> bool:
+    """True for greetings, acknowledgements, and short conversational
+    small-talk that shouldn't trigger a RAG retrieval. RAG always returns
+    its top-k by similarity even when the query is meaningless, which
+    means "hello" or "how are you" pulls whatever page happens to have
+    the closest embedding (usually the cover page). Two-pass check: the
+    cheap word-set covers one-word filler ("hi", "thanks"), the regex
+    covers fixed conversational phrases ("how are you doing today",
+    "good morning")."""
+    if not text:
+        return True
+    if _SMALL_TALK_PATTERNS.search(text):
+        return True
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words:
+        return True
+    if len(words) > 3:
+        return False
+    return all(w in _TRIVIAL_GREETINGS for w in words)
 
 
 def answer_question(user_id, session_id, document_id, question, level):
     require_session(session_id, user_id)
-    chunks = search_chunks(user_id, document_id, question)
-    context = context_from(chunks)
 
-    system = (
-        "You are a study tutor. Answer using only the material provided below. "
-        "If the material does not cover the question, say so plainly and do not "
-        "make anything up. " + LEVELS.get(level, LEVELS["novice"])
-        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
-    )
-
+    # Pull the message history once; we need it both for the embedding
+    # query (to resolve pronouns) and for the LLM call further down.
     history = supabase.table("messages").select("role, content") \
         .eq("session_id", session_id).order("created_at").execute().data or []
+
+    skip_rag = _is_trivial_message(question)
+    if skip_rag:
+        chunks = []
+    else:
+        # Pronoun resolution for RAG. The LLM sees full history so it
+        # understands "can I see a picture of it" → "of anthracnose". The
+        # embedding step is stateless though: it just embeds the literal
+        # current question, which for short pronoun-heavy follow-ups
+        # ("can i see a picture of it") lands on whatever page has the
+        # closest generic-visual chunk (usually the cover). Fix by
+        # prepending the most recent user question + assistant reply to
+        # the embedding query. Truncated so a long lesson doesn't drown
+        # the actual question.
+        prior_user = next((m["content"] for m in reversed(history)
+                           if m["role"] == "user" and m["content"]), "")
+        prior_asst = next((m["content"] for m in reversed(history)
+                           if m["role"] == "assistant" and m["content"]), "")
+        rag_query = question
+        if prior_user or prior_asst:
+            rag_query = " ".join([
+                prior_asst[:400],
+                prior_user[:200],
+                question,
+            ]).strip()
+        chunks = search_chunks(user_id, document_id, rag_query)
+    context = context_from(chunks) if chunks else "(no material retrieved)"
+
+    # Load the outline + current cursor so Claude can answer questions like
+    # "what was lesson 1 about?" or "what's coming up next?" without having
+    # to RAG-retrieve the topic list. Teach sessions have a document_id +
+    # an outline; non-teach (pure ask) sessions might not, so fall back
+    # gracefully. The current topic is marked with "← you are here".
+    session_row = supabase.table("chat_sessions").select(
+        "current_outline_point, document_id, focus_area_id"
+    ).eq("id", session_id).eq("user_id", user_id).execute().data
+    outline_block = ""
+    if session_row:
+        try:
+            points = _session_points(session_row[0])
+            if points:
+                cur = session_row[0].get("current_outline_point") or 0
+                lines = []
+                for i, p in enumerate(points):
+                    marker = " ← you are here" if i == cur else ""
+                    lines.append(f"Lesson {i + 1}: {p}{marker}")
+                outline_block = (
+                    "\n\nReference only — the outline below is for your own "
+                    "lookup when the student explicitly asks about lesson "
+                    "numbering, what they've covered, or what's next. Do "
+                    "NOT recite, summarize, or reference this list "
+                    "unprompted. If the student just greets you or asks "
+                    "something unrelated, ignore it.\n" + "\n".join(lines)
+                )
+        except Exception:
+            log.exception("answer_question outline lookup failed for session=%s",
+                          session_id)
+
+    system = (
+        "You are a study tutor. Answer exactly what the student asks, "
+        "nothing more. If the student just greets you (hi, hello, hey) "
+        "or makes small talk, reply briefly and warmly in one sentence "
+        "and ask what they'd like to know. Do NOT summarize the lesson, "
+        "introduce topics, or volunteer 'today's lesson is...' unless "
+        "they ask. When they do ask a content question, answer using only "
+        "the material provided below. If the material does not cover it, "
+        "say so plainly and do not make anything up. "
+        + LEVELS.get(level, LEVELS["novice"])
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
+        + outline_block
+    )
+
     msgs = [{"role": m["role"], "content": m["content"]}
             for m in history if m["content"]]
     msgs.append({
@@ -214,14 +474,38 @@ def answer_question(user_id, session_id, document_id, question, level):
         messages=msgs,
     ).content[0].text
 
+    # Strip noise: keyword-filter sources against the question's content
+    # words, and (for image-seeking questions) pull every subfigure on
+    # the surviving pages so composite figures stay intact. Both done
+    # inside _sources_from_search so the filter applies before expansion.
+    keywords = _topic_keywords(question)
+    image_seeking = _wants_figures(question)
+    sources = _sources_from_search(
+        chunks, document_id=document_id, user_id=user_id,
+        expand_figures=image_seeking,
+        topic_keywords=keywords or None,
+    )
+
+    # Drop inline figures unless the student's question is clearly asking
+    # to see one. The page citations and snippets still flow through, so
+    # the student can navigate to the page if they want the image.
+    if not image_seeking:
+        for s in sources:
+            s["figure_path"] = None
+
+    # Persist sources alongside the assistant reply so the transcript view
+    # can replay the same figures + page citations later, without re-
+    # running RAG (which is non-deterministic across embedding refreshes
+    # and would also cost an embed call per replay).
     supabase.table("messages").insert([
         {"session_id": session_id, "user_id": user_id,
          "role": "user", "content": question},
         {"session_id": session_id, "user_id": user_id,
-         "role": "assistant", "content": reply},
+         "role": "assistant", "content": reply,
+         "metadata": {"sources": sources}},
     ]).execute()
 
-    return reply, _sources_from_search(chunks)
+    return reply, sources
 
 
 def outline_points(outline_text):
@@ -270,7 +554,7 @@ def summarize_topic(user_id, document_id, topic, level):
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
-    return summary, _sources_from_search(chunks)
+    return summary, _sources_from_search(chunks, document_id=document_id, user_id=user_id)
 
 
 def summarize_outline(document_id, level):
@@ -343,14 +627,30 @@ def teach_next(user_id, session_id):
         .eq("session_id", session_id).eq("role", "assistant").execute()
     asst_count = asst_count_res.count or 0
     if asst_count > idx:
-        cached = supabase.table("messages").select("content") \
+        cached = supabase.table("messages").select("content, metadata") \
             .eq("session_id", session_id).eq("role", "assistant") \
             .order("created_at", desc=True).limit(1).execute().data
         if cached:
+            md = cached[0].get("metadata") or {}
+            saved_sources = md.get("sources") if isinstance(md, dict) else None
+            if saved_sources:
+                sources = saved_sources
+            else:
+                # Older lessons (pre-metadata column) won't have saved
+                # sources. Re-run RAG once to rebuild them so the peek
+                # still shows figures and material citations.
+                chunks = search_chunks(user_id, session["document_id"], topic)
+                sources = _sources_from_search(
+                    chunks,
+                    document_id=session["document_id"],
+                    user_id=user_id,
+                    expand_figures=True,
+                    topic_keywords=_topic_keywords(topic) or None,
+                )
             return {"done": False, "topic": topic,
                     "lesson": cached[0]["content"],
                     "progress": f"{idx + 1} of {len(points)}",
-                    "sources": []}
+                    "sources": sources}
 
     # Fresh generation about to call Claude — now's the time to charge
     # against the plan cap. Cached returns above this point don't count.
@@ -383,14 +683,23 @@ def teach_next(user_id, session_id):
         messages=[{"role": "user", "content": user_msg}],
     ).content[0].text
 
+    sources = _sources_from_search(
+        chunks, document_id=session["document_id"], user_id=user_id,
+        expand_figures=True,
+        topic_keywords=_topic_keywords(topic) or None,
+    )
+    # Persist sources alongside the lesson so the transcript and the cached
+    # peek can render the same figures + material citations without re-
+    # running RAG. Column is jsonb on Postgres.
     supabase.table("messages").insert({
         "session_id": session_id, "user_id": user_id,
         "role": "assistant", "content": lesson,
+        "metadata": {"sources": sources, "topic": topic},
     }).execute()
 
     return {"done": False, "topic": topic, "lesson": lesson,
             "progress": f"{idx + 1} of {len(points)}",
-            "sources": _sources_from_search(chunks)}
+            "sources": sources}
 
 
 def lesson_reset(user_id, session_id):

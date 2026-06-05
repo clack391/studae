@@ -132,6 +132,11 @@ export interface ChatMessage {
   role: MessageRole;
   content: string | null;
   image_path: string | null;
+  // Free-form jsonb the backend attaches to lesson messages. Currently
+  // carries { sources, topic } for teach-mode replies so the transcript
+  // can re-render the same figures and material citations without
+  // re-running RAG.
+  metadata?: { sources?: Source[]; topic?: string } | null;
   created_at: string;
 }
 

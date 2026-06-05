@@ -142,20 +142,67 @@ export default function Teach() {
             <Button label="Back to library" kind="pri" block onPress={() => router.replace('/(app)/library')} />
           </>
         ) : data?.lesson && !advance.isPending ? (
-          <>
-            <T v="handH3">{data.topic}</T>
-            {(data.sources ?? [])
+          (() => {
+            // Filter at the PAGE level. A page is "relevant" if at least
+            // one chunk's snippet contains the topic name. Both the
+            // inline figures and the "from your material" sources card
+            // are filtered by the same relevance set, so the student only
+            // sees figures and citations that belong to the current
+            // topic. Composite figures (e.g. Anthracnose subfigures A-D
+            // attached to four different chunks on the same page) stay
+            // intact because the whole page passes through.
+            const topic = (data.topic ?? '').toLowerCase().trim();
+            const sources = data.sources ?? [];
+            const relevantPages = new Set<number>();
+            if (topic) {
+              for (const s of sources) {
+                if (s.page_number != null && (s.snippet ?? '').toLowerCase().includes(topic)) {
+                  relevantPages.add(s.page_number);
+                }
+              }
+            }
+            const passesTopic = (s: typeof sources[number]) =>
+              !topic || (s.page_number != null && relevantPages.has(s.page_number));
+
+            const seenFig = new Set<string>();
+            const figureSources = sources
               .filter((s) => !!s.figure_path)
-              .map((s) => (
-                <Figure
-                  key={s.chunk_id}
-                  path={s.figure_path as string}
-                  caption={s.page_number != null ? `page ${s.page_number}` : undefined}
-                />
-              ))}
-            <MD>{data.lesson}</MD>
-            {data.sources?.length ? <Sources items={data.sources} /> : null}
-          </>
+              .filter(passesTopic)
+              .filter((s) => {
+                const p = s.figure_path as string;
+                if (seenFig.has(p)) return false;
+                seenFig.add(p);
+                return true;
+              });
+
+            // "from your material" card: only show sources whose snippet
+            // is non-empty (skip pure figure-supplements) AND whose page
+            // is topic-relevant. Dedupe by chunk_id.
+            const seenChunk = new Set<string>();
+            const materialSources = sources
+              .filter((s) => !!s.snippet)
+              .filter(passesTopic)
+              .filter((s) => {
+                if (seenChunk.has(s.chunk_id)) return false;
+                seenChunk.add(s.chunk_id);
+                return true;
+              });
+
+            return (
+              <>
+                <T v="handH3">{data.topic}</T>
+                {figureSources.map((s) => (
+                  <Figure
+                    key={s.chunk_id}
+                    path={s.figure_path as string}
+                    caption={s.page_number != null ? `page ${s.page_number}` : undefined}
+                  />
+                ))}
+                <MD>{data.lesson}</MD>
+                {materialSources.length ? <Sources items={materialSources} /> : null}
+              </>
+            );
+          })()
         ) : null}
       </Screen>
       {!done ? (

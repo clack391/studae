@@ -254,6 +254,38 @@ def ingest_document(user_id: str, doc_id: str, file_bytes: bytes, filename: str)
                 "content_type": ctype,
                 "figure_path": figure_path,
             })
+        # Backfill orphan figures. A page can have more extracted images
+        # than text chunks (e.g. an Anthracnose composite figure with 4
+        # subfigure photos but only one caption-paragraph chunk). The
+        # chunk loop above assigns one figure per chunk via figure_cursor;
+        # any extras are uploaded to storage but have no chunk row, so the
+        # page-level expansion in chat._sources_from_search never finds
+        # them. Insert a dedicated "figure-only" row for each leftover so
+        # all subfigures surface on the lesson screen. Empty content +
+        # placeholder embedding keeps these rows out of vector search
+        # while still being reachable by the page_number IN (...) query.
+        orphan_rows = []
+        placeholder_emb = None
+        for page_num, paths in page_figure_paths.items():
+            used = figure_cursor.get(page_num, 0)
+            for fp in paths[used:]:
+                if placeholder_emb is None:
+                    placeholder_emb = embed("figure")
+                orphan_rows.append({
+                    "document_id": doc_id,
+                    "user_id": user_id,
+                    "content": "",
+                    "embedding": placeholder_emb,
+                    "chunk_index": len(rows) + len(orphan_rows),
+                    "page_number": page_num,
+                    "content_type": "figure",
+                    "figure_path": fp,
+                })
+        if orphan_rows:
+            rows.extend(orphan_rows)
+            log.info("ingest backfilled %d orphan figure rows for doc_id=%s",
+                     len(orphan_rows), doc_id)
+
         supabase.table("chunks").insert(rows).execute()
         log.info("ingest inserted %d chunk rows for doc_id=%s", len(rows), doc_id)
 

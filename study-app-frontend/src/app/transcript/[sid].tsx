@@ -14,6 +14,58 @@ import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
 import { shortDate } from '@/lib/format';
+import type { Source } from '@/lib/types';
+
+// Same page-level relevance filter the live lesson screen uses, applied
+// here so saved transcripts surface the same figures + material citations
+// (and no unrelated stragglers from neighboring pages).
+function filterSourcesByTopic(sources: Source[], topic?: string | null) {
+  const t = (topic ?? '').toLowerCase().trim();
+  const relevantPages = new Set<number>();
+  if (t) {
+    for (const s of sources) {
+      if (s.page_number != null && (s.snippet ?? '').toLowerCase().includes(t)) {
+        relevantPages.add(s.page_number);
+      }
+    }
+  }
+  const passes = (s: Source) =>
+    !t || (s.page_number != null && relevantPages.has(s.page_number));
+
+  const seenFig = new Set<string>();
+  const figureSources = sources
+    .filter((s) => !!s.figure_path)
+    .filter(passes)
+    .filter((s) => {
+      const p = s.figure_path as string;
+      if (seenFig.has(p)) return false;
+      seenFig.add(p);
+      return true;
+    });
+
+  const seenChunk = new Set<string>();
+  const materialSources = sources
+    .filter((s) => !!s.snippet)
+    .filter(passes)
+    .filter((s) => {
+      if (seenChunk.has(s.chunk_id)) return false;
+      seenChunk.add(s.chunk_id);
+      return true;
+    });
+
+  // AiBubble renders one list — figures first, then "from your material"
+  // chips at the bottom. Merge by figure_path: a single combined list lets
+  // the bubble pick up figures from `figureSources` while still showing
+  // the deduped material rows. Keep figure rows even when their snippet
+  // is empty so subfigures still render.
+  const seenCombo = new Set<string>();
+  return [...figureSources, ...materialSources].filter((s) => {
+    const key = s.chunk_id;
+    if (seenCombo.has(key)) return false;
+    seenCombo.add(key);
+    return true;
+  });
+}
 
 function cap(s?: string | null) {
   if (!s) return '';
@@ -43,7 +95,10 @@ export default function Transcript() {
 
   const messages = msgs.data?.messages ?? [];
   const isTeach = s?.mode === 'teach';
-  const resumable = isTeach && (s?.current_outline_point ?? 0) > 0;
+  // Any teach session is resumable, even one where the user opened the
+  // lesson screen but hasn't pressed "Next topic" yet (current_outline_point
+  // still 0). The teach screen handles the finished case on its own.
+  const resumable = isTeach;
 
   // "{Lesson | Ask} · {date}". Falls back to "Transcript" while the session
   // row hasn't loaded.
@@ -60,7 +115,10 @@ export default function Transcript() {
     <View style={{ flex: 1, backgroundColor: C.paper }}>
       <AppBar back title={headerTitle} />
 
-      {/* Sub-bar: mode badge · level chip · Read-only badge */}
+      {/* Sub-bar: mode badge + level chip. Read-only badge only shows for
+          ask sessions, since teach sessions can be resumed from the
+          bottom button. Showing it on teach mode misled the user into
+          thinking they couldn't continue. */}
       <Row
         gap={8}
         style={{
@@ -76,13 +134,10 @@ export default function Transcript() {
             <Badge label={isTeach ? 'Teach' : 'Ask'} kind={isTeach ? 'exam' : 'out'} />
             <Chip label={cap(s.level)} on />
             <View style={{ flex: 1 }} />
-            <Badge label="Read-only" kind="out" />
+            {!isTeach ? <Badge label="Read-only" kind="out" /> : null}
           </>
         ) : (
-          <>
-            <View style={{ flex: 1 }} />
-            <Badge label="Read-only" kind="out" />
-          </>
+          <View style={{ flex: 1 }} />
         )}
       </Row>
 
@@ -101,7 +156,13 @@ export default function Transcript() {
               {m.role === 'user' ? (
                 <MeBubble text={m.content ?? ''} />
               ) : (
-                <AiBubble text={m.content ?? ''} />
+                <AiBubble
+                  text={m.content ?? ''}
+                  sources={filterSourcesByTopic(
+                    m.metadata?.sources ?? [],
+                    m.metadata?.topic,
+                  )}
+                />
               )}
             </Fragment>
           );
