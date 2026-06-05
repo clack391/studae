@@ -41,6 +41,8 @@ Then open `.env` and replace each `replace_me` / placeholder with the keys from 
 
 The required keys are `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY`. `LOG_LEVEL` and `ALLOWED_ORIGINS` are optional with sensible defaults.
 
+`SUPABASE_JWT_SECRET` is **strongly recommended**. When set, `auth.py` verifies the user's access token locally on every request (microseconds, no network) instead of calling `supabase.auth.get_user`, which is a network round-trip to the Supabase Auth API (~100–300ms per request). Grab the value from Supabase dashboard → Project Settings → API → JWT Settings → JWT Secret (the long base64-ish string, **not** the anon or service-role keys). Without it, the backend still works but every endpoint is noticeably slower because each request pays the network-auth tax.
+
 ### 3. Install
 
 Install `uv` if you don't have it:
@@ -203,7 +205,7 @@ study-app-backend/
 ├── app/                       # the FastAPI application package
 │   ├── __init__.py
 │   ├── main.py                # FastAPI app + all HTTP endpoints
-│   ├── auth.py                # Supabase JWT → user_id dependency
+│   ├── auth.py                # Supabase JWT → user_id (local HS256 verify, network fallback)
 │   ├── clients.py             # Singletons: supabase, claude, gemini
 │   ├── ingest.py              # PDF/image → text → chunks → embeddings → outline
 │   ├── chat.py                # Retrieval, ask mode, teach mode

@@ -204,7 +204,17 @@ Append-only log of every turn in a chat session.
 | `role` | `text` |  |
 | `content` | `text` |  Nullable |
 | `image_path` | `text` |  Nullable |
+| `metadata` | `jsonb` |  Nullable |
 | `created_at` | `timestamptz` |  Nullable |
+
+### Notes on `metadata`
+
+Free-form bag the backend attaches to assistant turns. Currently shaped as `{"sources": [...], "topic": "..."}`:
+
+- `sources` — the same `Source[]` shape returned to the frontend (`chunk_id`, `page_number`, `figure_path`, `snippet`). Saved on every teach lesson and every `/ask` reply so the transcript view and the cached lesson peek can replay figures + material citations without re-running RAG (which would cost an embed call and could drift between runs).
+- `topic` — set by `teach_next` so the transcript view can apply the same page-level topic-relevance filter the live lesson screen uses.
+
+Older rows (pre-column) have `metadata = NULL` — readers must treat that as "no saved sources" and either skip figures or fall back to RAG.
 
 ### Relationships
 
@@ -214,6 +224,14 @@ Append-only log of every turn in a chat session.
 ### RLS
 
 - Policy `own messages`: `auth.uid() = user_id`.
+
+### Migration
+
+Added 2026-06-05 to enable transcript figure replay and the lesson cached-peek source path:
+
+```sql
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS metadata jsonb;
+```
 
 ---
 

@@ -84,10 +84,14 @@ fly secrets set \
   ANTHROPIC_API_KEY=sk-ant-... \
   GEMINI_API_KEY=AI... \
   SUPABASE_URL=https://<ref>.supabase.co \
-  SUPABASE_SERVICE_KEY=eyJ...
+  SUPABASE_SERVICE_KEY=eyJ... \
+  SUPABASE_ANON_KEY=eyJ... \
+  SUPABASE_JWT_SECRET=<long-base64-secret>
 ```
 
 These come from your providers. They get encrypted and injected into the running container, never seen in logs.
+
+`SUPABASE_JWT_SECRET` enables local JWT verification on every request — without it the backend round-trips to Supabase Auth on every tap (~100–300 ms of added latency per request). Grab it from Supabase dashboard → Project Settings → API → JWT Settings → JWT Secret (it is **not** the anon or service-role key).
 
 ### 1.5 Deploy
 
