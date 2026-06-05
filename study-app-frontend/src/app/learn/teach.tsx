@@ -3,7 +3,7 @@ import { Alert, Pressable, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { speakLesson, stopSpeaking } from '@/lib/tts';
+import { speakLesson, stopSpeaking, stripMarkdown } from '@/lib/tts';
 import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Bar } from '@/components/ui/Bar';
@@ -20,24 +20,6 @@ import { on402 } from '@/lib/upgrade';
 import { parseProgressText } from '@/lib/format';
 import { useTheme } from '@/lib/theme';
 import type { LessonNextResponse } from '@/lib/types';
-
-// Strip markdown so the TTS voice reads "important" instead of "star star important star star".
-function stripMarkdown(s: string): string {
-  return s
-    .replace(/```[\s\S]*?```/g, ' ')       // code fences
-    .replace(/`[^`]*`/g, ' ')              // inline code
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ') // images
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links, keep label
-    .replace(/^#{1,6}\s+/gm, '')           // headings
-    .replace(/\*\*([^*]+)\*\*/g, '$1')     // bold
-    .replace(/\*([^*]+)\*/g, '$1')         // italic
-    .replace(/__([^_]+)__/g, '$1')         // bold underscore
-    .replace(/_([^_]+)_/g, '$1')           // italic underscore
-    .replace(/^>\s?/gm, '')                // blockquotes
-    .replace(/^[-*+]\s+/gm, '')            // bullet markers
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
 
 export default function Teach() {
   const C = useTheme();
@@ -91,7 +73,11 @@ export default function Teach() {
       setSpeaking(false);
       return;
     }
-    const text = stripMarkdown(`${data.topic ? data.topic + '. ' : ''}${data.lesson}`);
+    // Claude's lesson body already opens with a heading naming the topic
+    // (e.g. "# Spider Mites" → spoken as "Spider Mites"), and the first
+    // sentence usually starts with the topic too. Prepending data.topic
+    // here meant the topic was spoken three times back-to-back.
+    const text = stripMarkdown(data.lesson);
     if (!text) return;
     setSpeaking(true);
     speakLesson(text, {

@@ -14,7 +14,7 @@ import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
-import { speakLesson, stopSpeaking } from '@/lib/tts';
+import { speakLesson, stopSpeaking, stripMarkdown } from '@/lib/tts';
 import { useTheme } from '@/lib/theme';
 
 // Some document titles arrived URL-encoded from the file picker on certain
@@ -22,25 +22,6 @@ import { useTheme } from '@/lib/theme';
 // filenames.
 function decodeTitle(s: string): string {
   try { return decodeURIComponent(s); } catch { return s; }
-}
-
-// Same markdown-stripping helper used in the lesson screen so TTS reads
-// "important" instead of "star star important star star".
-function stripMarkdown(s: string): string {
-  return s
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`]*`/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
-    .replace(/^>\s?/gm, '')
-    .replace(/^[-*+]\s+/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 export default function Summary() {
