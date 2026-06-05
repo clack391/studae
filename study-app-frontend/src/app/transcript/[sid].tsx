@@ -131,8 +131,8 @@ export default function Transcript() {
       >
         {s ? (
           <>
-            <Badge label={isTeach ? 'Teach' : 'Ask'} kind={isTeach ? 'exam' : 'out'} />
-            <Chip label={cap(s.level)} on />
+            <Chip label={isTeach ? 'Teach' : 'Ask'} on />
+            <Chip label={cap(s.level)} />
             <View style={{ flex: 1 }} />
             {!isTeach ? <Badge label="Read-only" kind="out" /> : null}
           </>
