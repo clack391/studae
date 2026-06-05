@@ -14,7 +14,7 @@ Each side has its own README with deep setup steps:
 - Backend: [study-app-backend/README.md](study-app-backend/README.md)
 - Frontend: [study-app-frontend/README.md](study-app-frontend/README.md)
 
-This top-level README is the quick start.
+This top-level README is the **local dev quick start**. To take Studae beyond your laptop (deploy the backend to the cloud, build an Android APK, ship to the stores), read [LAUNCH.md](LAUNCH.md).
 
 ## Prerequisites
 
