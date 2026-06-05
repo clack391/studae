@@ -6,15 +6,85 @@ type Cbs = {
   onError?: (e: unknown) => void;
 };
 
+// Expo Speech has a hard 4000-char limit per Speech.speak call. Long
+// lessons easily exceed this and the native side rejects the whole
+// utterance, leaving the user with no audio. Cap a bit below the limit
+// to leave room for whatever transformations the platform applies (TTS
+// engines sometimes expand abbreviations / punctuation internally).
+const CHUNK_LIMIT = 3500;
+
+// Module-level cancellation token. Each speakLesson call bumps the
+// generation; if a chunk's onDone fires while a NEWER speak is in
+// flight (or after stopSpeaking), we drop it instead of advancing.
+let speakGen = 0;
+
+/**
+ * Split text into TTS-friendly chunks under CHUNK_LIMIT. Tries to
+ * break on a sentence boundary, then any whitespace, then a hard
+ * cut at the limit. Empty input returns an empty array.
+ */
+function chunkForSpeech(text: string): string[] {
+  const out: string[] = [];
+  let remaining = text;
+  while (remaining.length > CHUNK_LIMIT) {
+    // Look for the last sentence-ending punctuation inside the window.
+    // Prefer .?! at the end of a sentence; fall back to a newline; fall
+    // back to any whitespace; fall back to a hard cut.
+    const window = remaining.slice(0, CHUNK_LIMIT);
+    let cut = Math.max(
+      window.lastIndexOf('. '),
+      window.lastIndexOf('? '),
+      window.lastIndexOf('! '),
+      window.lastIndexOf('\n'),
+    );
+    if (cut < CHUNK_LIMIT * 0.5) {
+      // No sentence break in the upper half — try any whitespace, then
+      // accept a mid-word cut as last resort.
+      cut = window.lastIndexOf(' ');
+      if (cut < CHUNK_LIMIT * 0.5) cut = CHUNK_LIMIT - 1;
+    }
+    out.push(remaining.slice(0, cut + 1).trim());
+    remaining = remaining.slice(cut + 1);
+  }
+  if (remaining.trim()) out.push(remaining.trim());
+  return out;
+}
+
 export function speakLesson(text: string, cbs: Cbs = {}) {
-  Speech.speak(text, {
-    onDone: cbs.onDone,
-    onStopped: cbs.onStopped,
-    onError: cbs.onError,
-  });
+  const chunks = chunkForSpeech(text);
+  if (!chunks.length) {
+    cbs.onDone?.();
+    return;
+  }
+  const gen = ++speakGen;
+  let idx = 0;
+
+  function next() {
+    // Bail if a newer speak started or stopSpeaking was called between
+    // utterances. Without this, the previous lesson's tail could keep
+    // playing over the new one's start.
+    if (gen !== speakGen) return;
+    if (idx >= chunks.length) {
+      cbs.onDone?.();
+      return;
+    }
+    const chunk = chunks[idx++];
+    Speech.speak(chunk, {
+      onDone: () => {
+        if (gen !== speakGen) return;
+        next();
+      },
+      onStopped: cbs.onStopped,
+      onError: cbs.onError,
+    });
+  }
+  next();
 }
 
 export function stopSpeaking() {
+  // Invalidate any in-flight speakLesson chunk chain so its onDone
+  // callback can't advance to the next chunk after we stop.
+  speakGen++;
   Speech.stop();
 }
 
