@@ -909,16 +909,11 @@ def clear_my_data(user_id: str = Depends(get_user_id)):
     # Documents cascades to chunks, focus_areas, flashcards,
     # flashcard_reviews, chat_sessions, messages, assessments, questions,
     # and answers. So this single delete clears the entire study graph.
+    # `usage` is deliberately NOT reset: questions/assessments-this-month
+    # are plan accounting, not user content. Letting Clear Data reset
+    # them would turn the button into a free way to bypass plan caps.
+    # Usage resets naturally at the start of the next billing period.
     supabase.table("documents").delete().eq("user_id", user_id).execute()
-    # `usage` is keyed on user_id with no FK to documents; zero it out so
-    # the user starts the month at 0/cap again.
-    try:
-        supabase.table("usage").update({
-            "questions_used": 0,
-            "assessments_used": 0,
-        }).eq("user_id", user_id).execute()
-    except Exception:
-        log.warning("usage reset during data clear failed for user_id=%s", user_id)
 
     return {"cleared": True}
 
