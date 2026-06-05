@@ -15,12 +15,14 @@ const qc = new QueryClient({
     queries: {
       retry: 1,
       refetchOnWindowFocus: false,
-      // Read queries stay fresh for 30 s. Revisiting Home / Library / Cards
-      // within that window renders cached data instantly while quietly
-      // refetching in the background.
-      staleTime: 30_000,
-      // Keep cached pages around for 10 min so back-nav is instant.
-      gcTime: 10 * 60_000,
+      // Read queries stay fresh for 60 s. Revisiting Home / Library / Cards
+      // within that window renders cached data instantly without any
+      // background refetch. Writes invalidate the relevant keys directly,
+      // so this isn't the path that picks up new data (it's just what
+      // suppresses redundant fetches on tab switches).
+      staleTime: 60_000,
+      // Keep cached pages around for 15 min so back-nav is instant.
+      gcTime: 15 * 60_000,
     },
   },
 });

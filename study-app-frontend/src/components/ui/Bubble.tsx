@@ -3,6 +3,7 @@ import { useTheme } from '@/lib/theme';
 import { T } from './T';
 import { MD } from './MD';
 import { Sources } from './Sources';
+import { Figure } from './Figure';
 import type { Source } from '@/lib/types';
 
 export function MeBubble({ text }: { text: string }) {
@@ -26,8 +27,10 @@ export function MeBubble({ text }: { text: string }) {
 }
 
 export function AiBubble({ text, sources }: { text: string; sources?: Source[] }) {
-
   const C = useTheme();
+  // Pull out any source chunks that have a real figure image so we can
+  // render them inline. Same component the lesson and test screens use.
+  const figureSources = (sources ?? []).filter((s) => !!s.figure_path);
   return (
     <View
       style={{
@@ -44,6 +47,13 @@ export function AiBubble({ text, sources }: { text: string; sources?: Source[] }
       }}
     >
       <MD>{text}</MD>
+      {figureSources.map((s) => (
+        <Figure
+          key={s.chunk_id}
+          path={s.figure_path as string}
+          caption={s.page_number != null ? `page ${s.page_number}` : undefined}
+        />
+      ))}
       {sources?.length ? <Sources items={sources} /> : null}
     </View>
   );

@@ -222,8 +222,13 @@ def ingest_document(user_id: str, doc_id: str, file_bytes: bytes, filename: str)
         log.info("ingest chunked into %d chunks for doc_id=%s", len(chunks), doc_id)
         _set_progress(doc_id, f"embedding chunk 0 of {len(chunks)}")
 
-        # Per-page cursor so consecutive figure chunks on the same page get
-        # consecutive extracted images.
+        # Per-page cursor so consecutive chunks on the same page claim the
+        # next extracted image in order. Originally this only ran for
+        # chunks classified as "figure" (i.e., `[bracketed description]`
+        # chunks produced by OCR on scanned pages). That meant text-layer
+        # PDFs never got any figures attached even though PyMuPDF found
+        # them. Now every chunk tries to claim a figure for its page; the
+        # cursor still prevents the same image being assigned twice.
         figure_cursor: dict[int, int] = {}
 
         rows = []
@@ -234,12 +239,11 @@ def ingest_document(user_id: str, doc_id: str, file_bytes: bytes, filename: str)
                 _set_progress(doc_id, f"embedding chunk {i} of {len(chunks)}")
             ctype = classify_content_type(chunk)
             figure_path = None
-            if ctype == "figure":
-                available = page_figure_paths.get(page_num, [])
-                used = figure_cursor.get(page_num, 0)
-                if used < len(available):
-                    figure_path = available[used]
-                    figure_cursor[page_num] = used + 1
+            available = page_figure_paths.get(page_num, [])
+            used = figure_cursor.get(page_num, 0)
+            if used < len(available):
+                figure_path = available[used]
+                figure_cursor[page_num] = used + 1
             rows.append({
                 "document_id": doc_id,
                 "user_id": user_id,

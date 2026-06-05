@@ -56,7 +56,7 @@ export default function NewFocus() {
         <AppBar back title="New focus area" />
         <Screen>
           <T v="small" style={{ textAlign: 'center', marginTop: 24 }}>
-            Upload a document first — focus areas group topics from your material.
+            Upload a document first. Focus areas group topics from your material.
           </T>
         </Screen>
       </View>

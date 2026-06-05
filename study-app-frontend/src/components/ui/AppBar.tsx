@@ -17,6 +17,19 @@ const titleWebOverflow = Platform.OS === 'web'
   ? ({ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', width: '100%', textAlign: 'center' } as any)
   : null;
 
+// Cap titles at ~22 characters with an ellipsis. We do this in JS instead
+// of using <Text numberOfLines={1}> because numberOfLines forces Android
+// onto a text-rendering path that ignores Kalam's font padding and clips
+// the top of capital letters (P / T / S). Without numberOfLines, the
+// glyphs render fully. The cap keeps long titles like "Pictorial Guide
+// of Pest and Disease Identification and Management" from wrapping to a
+// second line and breaking the AppBar height.
+const TITLE_MAX = 22;
+function truncateTitle(s: string): string {
+  if (s.length <= TITLE_MAX) return s;
+  return s.slice(0, TITLE_MAX - 1).trimEnd() + '…';
+}
+
 export function AppBar({ title, back, onBack, right, brand }: {
   title?: string;
   back?: boolean;
@@ -51,10 +64,14 @@ export function AppBar({ title, back, onBack, right, brand }: {
           ) : null}
         </View>
 
-        {/* Centered title — natural-flow Caveat. No fixed height — the text
-            sizes itself, so Android can't clip it against a too-small box.
-            Generous lineHeight + paddingBottom let descenders breathe. */}
-        <View style={{ flex: 1, alignItems: 'center', overflow: 'visible' }}>
+        {/* Centered title slot. The brand wordmark is short enough to use
+            alignItems: 'center' so the dot accent sits flush. Document
+            titles can be very long ("Pictorial Guide of Pest and Disease
+            …"), so the title branch fills the slot's width and lets
+            Text's own truncation handle overflow. Without width: '100%'
+            the Text would shrink-wrap to its full natural width and spill
+            into the back-button and right-icon zones. */}
+        <View style={{ flex: 1, overflow: 'visible', flexDirection: 'row', justifyContent: 'center' }}>
           {brand ? (
             <T
               style={{
@@ -71,8 +88,6 @@ export function AppBar({ title, back, onBack, right, brand }: {
             </T>
           ) : (
             <T
-              numberOfLines={Platform.OS === 'web' ? undefined : 1}
-              ellipsizeMode="tail"
               style={[
                 {
                   fontFamily: F.hand,
@@ -82,11 +97,12 @@ export function AppBar({ title, back, onBack, right, brand }: {
                   color: C.ink,
                   letterSpacing: 0.2,
                   textAlign: 'center',
+                  width: '100%',
                 },
                 titleWebOverflow,
               ]}
             >
-              {title ?? ''}
+              {truncateTitle(title ?? '')}
             </T>
           )}
         </View>

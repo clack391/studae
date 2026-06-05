@@ -83,7 +83,7 @@ export default function Revise() {
               <Ionicons name="checkmark-circle-outline" size={40} color={C.ok} />
               <T v="handH3">Nothing missed yet</T>
               <T v="small" style={{ textAlign: 'center' }}>
-                Take a test on this document — the questions you get wrong land here, and you can practice them.
+                Take a test on this document. The questions you get wrong land here, and you can practice them.
               </T>
               <Button label="Take a test" kind="pri" onPress={() => router.replace({ pathname: '/test/create', params: { documentId: id } })} />
             </View>
@@ -97,7 +97,7 @@ export default function Revise() {
               title="Writing a practice test"
               tips={[
                 'Practice tests lean toward topics you got wrong before.',
-                'Take it through the normal flow — same timer, same grading.',
+                'Take it through the normal flow. Same timer, same grading.',
               ]}
             />
           </>

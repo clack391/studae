@@ -49,6 +49,25 @@ ANTI_INJECTION = (
 )
 
 
+# Appended to prompts that consume chunk text the student can also see.
+# OCR'd pages encode figures as [bracketed descriptions], but the actual
+# extracted image files render in the UI next to the chunk. Without this
+# note, Claude reads "[A solid grey square with a thin white border]" or
+# similar OCR placeholder text and confidently tells the student the
+# images aren't available, even though the real photo is being rendered
+# right above the answer.
+FIGURE_NOTE = (
+    " If the material includes [bracketed text] like '[Figure 3: leaf with "
+    "yellow spots]' or '[A solid grey square]', that is an OCR caption, not "
+    "the figure itself. The actual figure image may be rendered to the "
+    "student in the UI alongside the chunk text. Refer to figures by what "
+    "they depict (e.g. 'the leaf with yellow spots'). Do not claim the "
+    "images are unavailable, invisible, or appear as placeholders or grey "
+    "squares. Treat each bracketed caption as a real figure the student "
+    "can see."
+)
+
+
 LEVELS = {
     "novice": (
         "Explain in very simple words and short sentences. "
@@ -128,7 +147,7 @@ def answer_photo_question(user_id, session_id, document_id,
         "asking about it. Use both the photo and the document material below. "
         "If the material doesn't cover what's in the photo, explain from the "
         "photo alone. " + LEVELS.get(level, LEVELS["novice"])
-        + ANTI_INJECTION + STYLE_RULES
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
     )
 
     history = supabase.table("messages").select("role, content") \
@@ -176,7 +195,7 @@ def answer_question(user_id, session_id, document_id, question, level):
         "You are a study tutor. Answer using only the material provided below. "
         "If the material does not cover the question, say so plainly and do not "
         "make anything up. " + LEVELS.get(level, LEVELS["novice"])
-        + ANTI_INJECTION + STYLE_RULES
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
     )
 
     history = supabase.table("messages").select("role, content") \
@@ -348,7 +367,7 @@ def teach_next(user_id, session_id):
         "material provided. Teach only the current topic. Do not rush ahead "
         "or dump everything. Build on what the student has already covered. "
         + LEVELS.get(session["level"], LEVELS["novice"])
-        + ANTI_INJECTION + STYLE_RULES
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
     )
     user_msg = (
         f"Topics already covered:\n"

@@ -261,7 +261,7 @@ export default function DocDetail() {
             </View>
           ) : null}
           {!outline.length ? (
-            <T v="small" style={{ textAlign: 'center' }}>No outline yet — has this document finished ingesting?</T>
+            <T v="small" style={{ textAlign: 'center' }}>No outline yet. Has this document finished ingesting?</T>
           ) : null}
         </Card>
       </Screen>

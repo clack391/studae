@@ -61,8 +61,8 @@ export default function Ask() {
   });
 
   const ask = useMutation({
-    mutationFn: (question: string) => api.ask({
-      session_id: sessionId!,
+    mutationFn: ({ question, sid }: { question: string; sid: string }) => api.ask({
+      session_id: sid,
       document_id: documentId,
       question,
       level,
@@ -77,12 +77,21 @@ export default function Ask() {
     },
   });
 
-  useEffect(() => { if (!sessionId && documentId) ensureSession.mutate(); }, [documentId]);
-
-  function send(text: string) {
-    if (!sessionId) return;
+  // Lazy session creation. We only create a chat_sessions row on the
+  // first send. If the user opens this screen and leaves without asking,
+  // nothing lands in the DB and the history page stays clean.
+  async function send(text: string) {
+    let sid = sessionId;
+    if (!sid) {
+      try {
+        const created = await ensureSession.mutateAsync();
+        sid = created.session_id;
+      } catch {
+        return; // ensureSession's onError already alerted
+      }
+    }
     setTurns((t) => [...t, { role: 'user', text }]);
-    ask.mutate(text);
+    ask.mutate({ question: text, sid });
     setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 50);
   }
 
@@ -116,12 +125,10 @@ export default function Ask() {
         <Composer
           onSend={send}
           onPhoto={() => router.push({ pathname: '/learn/photo', params: { documentId, sessionId } })}
-          // Hard-disable only until the session exists. Once it's ready,
-          // keep the input editable while the AI answers so the user can
-          // draft their next question. Send button is soft-locked via
-          // `sending` so multi-tap doesn't queue parallel asks.
-          disabled={!sessionId}
-          sending={ask.isPending}
+          // Always editable. Session is created lazily on first send, so
+          // we don't gate input on it. Send button is soft-locked while
+          // a question is in flight or a session is being created.
+          sending={ask.isPending || ensureSession.isPending}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>

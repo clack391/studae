@@ -86,7 +86,7 @@ export default function CardsHome() {
             <Ionicons name="albums-outline" size={40} color={C.ink3} />
             <T v="handH3">No cards yet</T>
             <T v="small" style={{ textAlign: 'center' }}>
-              Upload a document first — flashcards are generated from your material.
+              Upload a document first. Flashcards are generated from your material.
             </T>
           </View>
         </Screen>
@@ -139,7 +139,7 @@ export default function CardsHome() {
           <Card kind="accent" flat>
             <Row>
               <Ionicons name="checkmark-circle" size={18} color={C.accent} />
-              <T v="small" style={{ flex: 1 }}>All caught up — no cards are due right now.</T>
+              <T v="small" style={{ flex: 1 }}>All caught up. No cards are due right now.</T>
             </Row>
           </Card>
         )}
@@ -158,7 +158,7 @@ export default function CardsHome() {
             <AIThinking
               title="Writing your cards"
               tips={[
-                'Reviewing cards is free — only generation counts against the cap.',
+                'Reviewing cards is free. Only generation counts against the cap.',
                 'A card is "mastered" when you\'ve rated it well 3 times and it\'s scheduled 21+ days out.',
                 'Studae picks card fronts that prompt recall, not recognition.',
               ]}

@@ -66,19 +66,14 @@ export default function Home() {
     },
   });
 
-  // Across-doc focus areas — fan out one query per ready document.
+  // Across-doc focus areas. One backend call returns every owned focus
+  // area annotated with the parent document title (replaces the previous
+  // N+1 fan-out where each ready doc fired its own /focus-areas request).
   const focusAll = useQuery<AreaWithDoc[]>({
     queryKey: ['focus-areas-all'],
     queryFn: async () => {
-      const d = await api.dashboard();
-      const ready = d.documents.filter((x) => x.status === 'ready');
-      const results = await Promise.all(
-        ready.map(async (doc) => {
-          const r = await api.focusList(doc.id);
-          return r.focus_areas.map((fa) => ({ ...fa, document_title: doc.title }));
-        }),
-      );
-      return results.flat().sort((a, b) => {
+      const r = await api.focusListAll();
+      return (r.focus_areas as AreaWithDoc[]).sort((a, b) => {
         const aDate = a.exam_date ? new Date(a.exam_date).getTime() : Infinity;
         const bDate = b.exam_date ? new Date(b.exam_date).getTime() : Infinity;
         return aDate - bDate;
@@ -157,7 +152,7 @@ export default function Home() {
             </View>
             <T v="handH2">Your shelf is empty</T>
             <T style={{ textAlign: 'center', paddingHorizontal: 24 }}>
-              Upload your first chapter — a PDF, a scan, or a few photos of your notes — and Studae will teach you from it.
+              Upload your first chapter (a PDF, a scan, or a few photos of your notes) and Studae will teach you from it.
             </T>
             <View style={{ height: 4 }} />
             <Button
@@ -254,7 +249,7 @@ export default function Home() {
               <Divider />
               <PlanRow
                 done={false}
-                title={`Practice — ${nextExam.name}`}
+                title={`Practice: ${nextExam.name}`}
                 sub="Test scoped to your focus area"
                 onGo={() => router.push({ pathname: '/test/create', params: { documentId: nextExam.document_id, focusAreaId: nextExam.id } })}
               />

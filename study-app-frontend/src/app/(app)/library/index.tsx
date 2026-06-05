@@ -73,7 +73,7 @@ export default function Library() {
             if (p.average_score_percent != null) parts.push(`${p.average_score_percent}% avg`);
             meta = parts.length ? parts.join(' · ') : 'tap to open';
           } else if (failed) {
-            meta = 'could not read — tap to re-upload';
+            meta = 'could not read, tap to re-upload';
           } else if (!ready) {
             meta = d.progress ?? 'tap to view progress';
           }

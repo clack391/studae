@@ -44,7 +44,7 @@ export default function SignUp() {
         <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="at least 8 characters" />
         <Button label={busy ? 'Creating…' : 'Sign up'} kind="pri" size="lg" block onPress={submit} disabled={busy} />
         <View style={{ alignItems: 'center' }}>
-          <T v="mut">protected by Turnstile — no bots</T>
+          <T v="mut">protected by Turnstile (no bots)</T>
         </View>
       </Screen>
     </>

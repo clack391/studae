@@ -117,7 +117,7 @@ export default function ProgressScreen() {
               <Row gap={8}>
                 <Ionicons name="flag-outline" size={16} color={C.accent} />
                 <T v="small" style={{ flex: 1 }}>
-                  Revise the questions you missed before — practice tests bias toward your weak areas.
+                  Revise the questions you missed before. Practice tests bias toward your weak areas.
                 </T>
                 <Ionicons name="chevron-forward" size={16} color={C.accent} />
               </Row>

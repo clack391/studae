@@ -97,7 +97,7 @@ export default function Ingest() {
           <Divider />
           <T v="bodyB">{d?.progress ?? (d?.status === 'ready' ? 'Done!' : 'Starting…')}</T>
           <Bar pct={pct} />
-          <T v="mut">Ingestion runs in the background — you can leave this screen.</T>
+          <T v="mut">Ingestion runs in the background. You can leave this screen.</T>
         </Card>
         <Col>
           {STAGES.map((s, i) => {

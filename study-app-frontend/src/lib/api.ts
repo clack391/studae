@@ -226,6 +226,8 @@ export const api = {
     POST<FocusArea>('/focus-areas', body),
   focusList: (documentId: string) =>
     GET<FocusAreasResponse>('/focus-areas', { document_id: documentId }),
+  focusListAll: () =>
+    GET<{ focus_areas: (import('./types').FocusArea & { document_title: string })[] }>('/focus-areas/all'),
   focusGet: (id: string) => GET<FocusArea>(`/focus-areas/${id}`),
   focusUpdate: (id: string, body: { name?: string; topics?: string[]; exam_date?: string | null }) =>
     PATCH<FocusArea>(`/focus-areas/${id}`, body),

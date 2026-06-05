@@ -86,7 +86,7 @@ export default function Plans() {
               <Ionicons name="time-outline" size={16} color={C.accent} />
               <T v="small" style={{ flex: 1 }}>
                 You're on <T v="bodyB">{cap(current ?? 'basic')}</T>
-                {onTrial ? ' — free trial' : ''}
+                {onTrial ? ' (free trial)' : ''}
                 {access.data.state.active ? '' : ' (expired)'}
               </T>
             </Row>

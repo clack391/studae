@@ -155,7 +155,7 @@ export default function LessonHistory() {
               <Ionicons name="time-outline" size={40} color={C.ink3} />
               <T v="handH3">No lessons or chats yet</T>
               <T v="small" style={{ textAlign: 'center' }}>
-                Start a lesson or ask a question — they'll all show up here.
+                Start a lesson or ask a question. They'll all show up here.
               </T>
             </View>
           </Card>

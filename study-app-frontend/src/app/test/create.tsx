@@ -213,7 +213,7 @@ export default function CreateTest() {
             <AIThinking
               title="Writing your test"
               tips={[
-                'Studae writes each question with its reference answer and rubric — that\'s what makes grading fair later.',
+                'Studae writes each question with its reference answer and rubric. That\'s what makes grading fair later.',
                 'For tests, expect ~60 s per MCQ and 90 s × points per theory question.',
                 'Exams are comprehensive and synthesis-heavy; tests focus on recall.',
               ]}

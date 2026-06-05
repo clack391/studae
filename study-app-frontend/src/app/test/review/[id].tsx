@@ -112,7 +112,7 @@ function DisputeBox({ onSubmit, onCancel, busy }: { onSubmit: (reason: string) =
   return (
     <Card kind="soft">
       <T v="bodyB">Flag this grade</T>
-      <T v="small">The score won't change — this goes to a human reviewer and helps us tune grading.</T>
+      <T v="small">The score won't change. This goes to a human reviewer and helps us tune grading.</T>
       <Field multiline value={reason} onChangeText={setReason} placeholder="Tell us why this grade seems unfair…" />
       <Row gap={10}>
         <Button label="Cancel" kind="ghost" onPress={onCancel} />

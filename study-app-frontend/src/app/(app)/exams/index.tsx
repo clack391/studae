@@ -98,7 +98,7 @@ export default function ExamsHome() {
               <Ionicons name="flag-outline" size={40} color={C.ink3} />
               <T v="handH3">No focus areas yet</T>
               <T v="small" style={{ textAlign: 'center' }}>
-                Create one for your next exam — pick the topics, set the date, and Studae will focus the lessons, flashcards, and tests on them.
+                Create one for your next exam. Pick the topics, set the date, and Studae will focus the lessons, flashcards, and tests on them.
               </T>
             </View>
           </Card>

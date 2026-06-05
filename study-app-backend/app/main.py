@@ -665,6 +665,31 @@ def focus_list(document_id: str, user_id: str = Depends(get_user_id)):
     return {"focus_areas": focus.list_for_document(user_id, document_id)}
 
 
+@app.get("/focus-areas/all")
+def focus_list_all(user_id: str = Depends(get_user_id)):
+    """Every focus area the caller owns, annotated with the parent
+    document's title for display. Replaces the per-document fan-out the
+    home screen used to do (N requests → 1).
+
+    Filters to focus areas whose document is still `ready`, since the
+    home screen only surfaces actionable focus areas. Two DB calls
+    total: focus_areas, then documents lookup."""
+    fas = supabase.table("focus_areas").select("*") \
+        .eq("user_id", user_id) \
+        .order("created_at", desc=True).execute().data or []
+    if not fas:
+        return {"focus_areas": []}
+    doc_ids = list({fa["document_id"] for fa in fas})
+    docs = supabase.table("documents").select("id, title, status") \
+        .in_("id", doc_ids).eq("user_id", user_id).execute().data or []
+    title_by_id = {d["id"]: d["title"] for d in docs if d["status"] == "ready"}
+    out = []
+    for fa in fas:
+        if fa["document_id"] in title_by_id:
+            out.append({**fa, "document_title": title_by_id[fa["document_id"]]})
+    return {"focus_areas": out}
+
+
 @app.get("/focus-areas/{focus_area_id}")
 def focus_get(focus_area_id: str, user_id: str = Depends(get_user_id)):
     return focus.get(user_id, focus_area_id)
