@@ -60,6 +60,32 @@ export default function Upload() {
     else Alert.alert('Upload failed', e?.message ?? 'Unknown error');
   }
 
+  // React Native's fetch + FormData on Android is flaky on slow LTE —
+  // the upload can drop mid-transfer with a bare "Network request failed"
+  // even though the connection is otherwise fine (other API calls work).
+  // Wrap the upload in a small retry: real client/server errors (4xx, 5xx
+  // from the backend) come through as ApiError and bypass retry; only
+  // bare fetch failures get a second and third try, with brief backoff.
+  async function uploadWithRetry(form: FormData) {
+    const MAX_TRIES = 3;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+      try {
+        return await api.uploadDocument(form);
+      } catch (e) {
+        lastErr = e;
+        // The backend answered — don't retry. Real errors deserve real
+        // handling (limit hit, file too large, validation failure).
+        if (e instanceof ApiError) throw e;
+        if (attempt < MAX_TRIES) {
+          // 400ms, then 1200ms. Total worst-case extra wait ~1.6 s.
+          await new Promise((r) => setTimeout(r, 400 * attempt * attempt));
+        }
+      }
+    }
+    throw lastErr;
+  }
+
   async function sendPdf() {
     setBusy('pdf');
     try {
@@ -73,7 +99,7 @@ export default function Upload() {
         type: 'application/pdf',
       } as any);
       setUploading(true);
-      await api.uploadDocument(form);
+      await uploadWithRetry(form);
       bustDocListCaches();
       // Return the user to where they came from (Home or Library). The new
       // doc shows up in the list with its ingest progress live.
@@ -107,7 +133,7 @@ export default function Upload() {
         type: a.mimeType ?? 'image/jpeg',
       } as any);
       setUploading(true);
-      await api.uploadDocument(form);
+      await uploadWithRetry(form);
       bustDocListCaches();
       // Return the user to where they came from (Home or Library). The new
       // doc shows up in the list with its ingest progress live.
