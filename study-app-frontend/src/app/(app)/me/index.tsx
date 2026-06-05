@@ -275,7 +275,22 @@ export default function Me() {
           </Card>
         </Pressable>
 
-        <Pressable onPress={() => supabase.auth.signOut()}>
+        <Pressable
+          onPress={() =>
+            Alert.alert(
+              'Sign out?',
+              'You will need to sign back in to use the app.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Sign out',
+                  style: 'destructive',
+                  onPress: () => supabase.auth.signOut(),
+                },
+              ],
+            )
+          }
+        >
           <Card kind="soft" flat>
             <Row>
               <Ionicons name="log-out-outline" size={18} color={C.ink2} />

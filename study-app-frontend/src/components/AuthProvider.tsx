@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import * as Linking from 'expo-linking';
 import { Session } from '@supabase/supabase-js';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { setCachedToken } from '@/lib/token-cache';
 import { parseAuthCallback } from '@/lib/deeplink';
@@ -25,17 +26,38 @@ const Ctx = createContext<Auth>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const qc = useQueryClient();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [recovering, setRecovering] = useState(false);
+  // Tracks the supabase user id of the previously-installed session. We
+  // compare against incoming auth events to detect identity changes
+  // (signout, signin-as-different-user) and purge the react-query cache
+  // before the new user's screens render. Without this purge, queries
+  // like ['dashboard'] / ['documents'] return the PREVIOUS user's cached
+  // data for a moment while the refetch runs, leaking content across
+  // accounts.
+  const prevUserId = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setCachedToken(data.session?.access_token ?? null);
+      prevUserId.current = data.session?.user.id ?? null;
       setLoading(false);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      const nextUserId = s?.user.id ?? null;
+      // Identity changed (signout, or signin as a different account).
+      // Clear all react-query caches synchronously so the next render
+      // can't show the previous user's documents/dashboard/etc. Also
+      // covers the edge case where Supabase fires SIGNED_IN with the
+      // same identity (TOKEN_REFRESHED-ish) but the user object is null
+      // first then populated — only purge on real identity flips.
+      if (nextUserId !== prevUserId.current) {
+        qc.clear();
+        prevUserId.current = nextUserId;
+      }
       setSession(s);
       // Fires on TOKEN_REFRESHED too. Keeps the cache fresh.
       setCachedToken(s?.access_token ?? null);
@@ -46,7 +68,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'PASSWORD_RECOVERY') setRecovering(true);
     });
     return () => sub.subscription.unsubscribe();
-  }, []);
+    // qc identity is stable for the lifetime of the QueryClientProvider,
+    // but list it anyway to satisfy exhaustive-deps.
+  }, [qc]);
 
   // Handle deep links. Both the cold-start URL (app launched from a link)
   // and warm-start (link tapped while running). For recovery links we set
