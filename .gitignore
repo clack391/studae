@@ -1,0 +1,28 @@
+# Secrets — must never be committed
+study-app-backend/.env
+study-app-backend/.env.*
+!study-app-backend/.env.example
+study-app-frontend/.env
+study-app-frontend/.env.*
+!study-app-frontend/.env.example
+
+# Frontend
+study-app-frontend/node_modules/
+study-app-frontend/.expo/
+study-app-frontend/dist/
+study-app-frontend/web-build/
+study-app-frontend/ios/
+study-app-frontend/android/
+
+# Backend
+study-app-backend/.venv/
+study-app-backend/__pycache__/
+study-app-backend/**/__pycache__/
+study-app-backend/.pytest_cache/
+study-app-backend/data/
+
+# General
+.DS_Store
+*.log
+.vscode/
+.idea/

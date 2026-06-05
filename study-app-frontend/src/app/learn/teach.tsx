@@ -1,0 +1,207 @@
+import { useEffect, useState } from 'react';
+import { Alert, Pressable, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useMutation } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
+import { speakLesson, stopSpeaking } from '@/lib/tts';
+import { Screen } from '@/components/ui/Screen';
+import { AppBar } from '@/components/ui/AppBar';
+import { Bar } from '@/components/ui/Bar';
+import { Button } from '@/components/ui/Button';
+import { T } from '@/components/ui/T';
+import { MD } from '@/components/ui/MD';
+import { Sources } from '@/components/ui/Sources';
+import { Figure } from '@/components/ui/Figure';
+import { AIThinking } from '@/components/ui/Pulse';
+import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
+import { Row } from '@/components/ui/Card';
+import { api } from '@/lib/api';
+import { on402 } from '@/lib/upgrade';
+import { parseProgressText } from '@/lib/format';
+import { useTheme } from '@/lib/theme';
+import type { LessonNextResponse } from '@/lib/types';
+
+// Strip markdown so the TTS voice reads "important" instead of "star star important star star".
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/```[\s\S]*?```/g, ' ')       // code fences
+    .replace(/`[^`]*`/g, ' ')              // inline code
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ') // images
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links, keep label
+    .replace(/^#{1,6}\s+/gm, '')           // headings
+    .replace(/\*\*([^*]+)\*\*/g, '$1')     // bold
+    .replace(/\*([^*]+)\*/g, '$1')         // italic
+    .replace(/__([^_]+)__/g, '$1')         // bold underscore
+    .replace(/_([^_]+)_/g, '$1')           // italic underscore
+    .replace(/^>\s?/gm, '')                // blockquotes
+    .replace(/^[-*+]\s+/gm, '')            // bullet markers
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export default function Teach() {
+  const C = useTheme();
+  const router = useRouter();
+  const { sessionId, documentId } = useLocalSearchParams<{ sessionId: string; documentId: string }>();
+  const [data, setData] = useState<LessonNextResponse | null>(null);
+  const [speaking, setSpeaking] = useState(false);
+
+  const next = useMutation({
+    mutationFn: () => api.lessonNext(sessionId!),
+    onSuccess: (r) => setData(r),
+    onError: (e: any) => {
+      if (on402(e, router, 'question')) return;
+      Alert.alert('Could not load next', e?.message ?? '');
+    },
+  });
+
+  // "Next topic" first asks the backend to mark the current topic done
+  // (advance the cursor), then fetches the lesson for the new current
+  // topic. Backend treats opening the screen as a peek, so progress only
+  // ticks up when the user explicitly advances.
+  const advance = useMutation({
+    mutationFn: async (opts?: { skip?: boolean }) => {
+      await api.lessonAdvance(sessionId!, opts);
+      return api.lessonNext(sessionId!);
+    },
+    onSuccess: (r) => setData(r),
+    onError: (e: any) => {
+      if (on402(e, router, 'question')) return;
+      Alert.alert('Could not load next', e?.message ?? '');
+    },
+  });
+
+  useEffect(() => {
+    if (sessionId) next.mutate();
+  }, [sessionId]);
+
+  // Stop TTS on unmount and whenever a new lesson loads.
+  useEffect(() => {
+    stopSpeaking();
+    setSpeaking(false);
+    return () => {
+      stopSpeaking();
+    };
+  }, [data?.lesson]);
+
+  function toggleSpeak() {
+    if (!data?.lesson) return;
+    if (speaking) {
+      stopSpeaking();
+      setSpeaking(false);
+      return;
+    }
+    const text = stripMarkdown(`${data.topic ? data.topic + '. ' : ''}${data.lesson}`);
+    if (!text) return;
+    setSpeaking(true);
+    speakLesson(text, {
+      onDone: () => setSpeaking(false),
+      onStopped: () => setSpeaking(false),
+      onError: () => setSpeaking(false),
+    });
+  }
+
+  const done = !!data?.done;
+  const { cur, total, pct } = parseProgressText(data?.progress);
+  const title = data?.topic ?? (done ? 'Finished' : 'Lesson');
+  const canSpeak = !!data?.lesson && !done;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: C.paper }}>
+      <AppBar
+        back
+        title={title}
+        right={
+          canSpeak ? (
+            <Pressable
+              onPress={toggleSpeak}
+              hitSlop={10}
+              style={{ padding: 5 }}
+              accessibilityLabel={speaking ? 'Stop reading the lesson aloud' : 'Read the lesson aloud'}
+            >
+              <Ionicons
+                name={speaking ? 'stop-circle' : 'volume-medium-outline'}
+                size={22}
+                color={C.accent}
+              />
+            </Pressable>
+          ) : null
+        }
+      />
+      <Row between style={{ paddingHorizontal: 16, paddingBottom: 4 }}>
+        <T v="bodyB">{data?.progress ? `Topic ${cur} of ${total}` : next.isPending ? 'Loading…' : ''}</T>
+        <View style={{ alignSelf: 'flex-end', backgroundColor: C.accentSoft, borderColor: C.accent, borderWidth: 1.6, borderRadius: 20, paddingVertical: 4, paddingHorizontal: 11 }}>
+          <T style={{ color: C.accentInk, fontWeight: '700', fontSize: 13 }}>Lesson</T>
+        </View>
+      </Row>
+      <View style={{ paddingHorizontal: 16, marginTop: 4 }}>
+        {next.isPending && !data ? <IndeterminateBar /> : <Bar pct={pct} />}
+      </View>
+      <Screen>
+        {next.isPending || advance.isPending ? (
+          <AIThinking
+            title={advance.isPending ? 'Loading the next topic' : (data ? 'Loading' : 'Studae is teaching')}
+            tips={[
+              'Lessons are grounded in your uploaded material.',
+              'Tap "Ask" any time during a lesson, your place is saved.',
+              'Pick a different level on the next lesson if it feels too easy or too dense.',
+              'Studae walks topics in outline order so each builds on the last.',
+            ]}
+          />
+        ) : null}
+        {done ? (
+          <>
+            <T v="handH2" style={{ textAlign: 'center', marginTop: 28 }}>You've finished the outline.</T>
+            <T style={{ textAlign: 'center' }}>{data?.lesson ?? 'Every topic in this document has been taught.'}</T>
+            <Button label="Back to library" kind="pri" block onPress={() => router.replace('/(app)/library')} />
+          </>
+        ) : data?.lesson && !advance.isPending ? (
+          <>
+            <T v="handH3">{data.topic}</T>
+            {(data.sources ?? [])
+              .filter((s) => !!s.figure_path)
+              .map((s) => (
+                <Figure
+                  key={s.chunk_id}
+                  path={s.figure_path as string}
+                  caption={s.page_number != null ? `page ${s.page_number}` : undefined}
+                />
+              ))}
+            <MD>{data.lesson}</MD>
+            {data.sources?.length ? <Sources items={data.sources} /> : null}
+          </>
+        ) : null}
+      </Screen>
+      {!done ? (
+        <Row
+          gap={10}
+          style={{ padding: 12, borderTopWidth: 2, borderColor: C.ink, backgroundColor: C.card }}
+        >
+          <Button
+            label="Ask"
+            kind="soft"
+            onPress={() =>
+              router.push({ pathname: '/learn/ask', params: { documentId, sessionId } })
+            }
+            disabled={next.isPending}
+          />
+          <Button
+            label="Skip"
+            kind="ghost"
+            onPress={() => advance.mutate({ skip: true })}
+            disabled={advance.isPending || next.isPending}
+          />
+          <View style={{ flex: 1 }}>
+            <Button
+              label={advance.isPending || next.isPending ? '…' : 'Next topic →'}
+              kind="pri"
+              block
+              onPress={() => advance.mutate(undefined)}
+              disabled={advance.isPending || next.isPending || !data?.lesson}
+            />
+          </View>
+        </Row>
+      ) : null}
+    </View>
+  );
+}
