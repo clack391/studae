@@ -218,9 +218,26 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
             "write questions about anything other than the stated topic, even "
             "if it appears in the passages.\n"
         )
+    # Spell out the exact count, and for mixed format spell out the
+    # objective/theory split too. Without an explicit split Claude reads
+    # "write 10 questions" + "mix MCQ and theory" as "10 of each", which
+    # is how a 10-question mixed test came back with 21 questions.
+    if fmt == "mixed":
+        half = num // 2
+        rest = num - half
+        count_rule = (
+            f"Write EXACTLY {num} questions in total: {half} multiple choice "
+            f"and {rest} open-ended theory. Do not exceed {num} total. Do not "
+            f"split each question into a multiple-choice and a theory version."
+        )
+    else:
+        count_rule = (
+            f"Write EXACTLY {num} questions in total. Do not exceed {num}. "
+            f"{FORMAT_RULE[fmt]}"
+        )
     prompt = (
         f"You are setting a {level}-level {kind} from the material below. "
-        f"Write {num} questions. {FORMAT_RULE[fmt]} "
+        f"{count_rule} "
         f"{DIFFICULTY_HINT.get(kind, '')}\n"
         f"{topic_clause}\n"
         "Rules:\n"
@@ -250,7 +267,11 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
-    return extract_json(raw)["questions"]
+    questions = extract_json(raw)["questions"]
+    # Hard cap even if the prompt is ignored. The student picked num and
+    # that's what they get; over-generation produces a wrong score
+    # denominator and burns review time.
+    return questions[:num]
 
 
 def create_assessment(user_id, document_id, kind, fmt, level, num, time_limit,
