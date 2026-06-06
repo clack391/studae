@@ -573,33 +573,94 @@ def answer_question(user_id, session_id, document_id, question, level):
                 question,
             ]).strip()
         chunks = search_chunks(user_id, document_id, rag_query)
-    context = context_from(chunks) if chunks else "(no material retrieved)"
 
-    # Load the outline + current cursor so Claude can answer questions like
-    # "what was lesson 1 about?" or "what's coming up next?" without having
-    # to RAG-retrieve the topic list. Teach sessions have a document_id +
-    # an outline; non-teach (pure ask) sessions might not, so fall back
-    # gracefully. The current topic is marked with "← you are here".
+    # If RAG came back empty AND we didn't deliberately skip it (trivial
+    # greeting), fall back to the document outline. Otherwise Claude sees
+    # "(no material retrieved)" as the material and confidently tells
+    # the student the document is empty — even though the document is
+    # there and the student is asking a meta-question that RAG just
+    # couldn't anchor to a chunk (e.g. "What is the simplest topic in
+    # this material?"). The outline always covers the whole document so
+    # it's a safe fallback for meta-questions.
+    if chunks:
+        context = context_from(chunks)
+    elif skip_rag:
+        context = "(no material retrieved)"
+    else:
+        outline_text = ""
+        if document_id:
+            try:
+                doc = supabase.table("documents").select("outline") \
+                    .eq("id", document_id).eq("user_id", user_id) \
+                    .execute().data
+                if doc:
+                    outline_text = (doc[0].get("outline") or "").strip()
+            except Exception:
+                log.exception("ask outline fallback lookup failed for document=%s",
+                              document_id)
+        context = (
+            f"Outline of the full document (RAG found no specific match for "
+            f"the question — use this overview to answer):\n{outline_text}"
+            if outline_text else
+            "(no specific passage matched, but the document is loaded — "
+            "do your best to answer from the conversation context and "
+            "general knowledge of the document's outline)"
+        )
+
+    # Load the outline so Claude can answer navigation / overview
+    # questions ("what topics are covered?", "list the chapters",
+    # "what's the simplest topic?"). Two framings:
+    #
+    #   - Teach-mode sessions: the student is mid-lesson, so we include
+    #     the "← you are here" marker on the current point. Claude can
+    #     then answer "what's next?", "what was lesson 1?", etc.
+    #   - Ask-mode sessions: the student is just asking about the
+    #     material — there is no "current lesson". Drop the marker and
+    #     present the outline as a flat topic list. Calling them
+    #     "Lesson 1, Lesson 2, …" in an ask-mode session is misleading
+    #     ("you're currently on Lesson 1" makes no sense if the student
+    #     never started a lesson). Use "Topic 1, Topic 2, …" instead.
     session_row = supabase.table("chat_sessions").select(
-        "current_outline_point, document_id, focus_area_id"
+        "current_outline_point, document_id, focus_area_id, mode"
     ).eq("id", session_id).eq("user_id", user_id).execute().data
     outline_block = ""
     if session_row:
         try:
-            points = _session_points(session_row[0])
+            row = session_row[0]
+            points = _session_points(row)
             if points:
-                cur = session_row[0].get("current_outline_point") or 0
+                is_teach = (row.get("mode") == "teach")
                 lines = []
-                for i, p in enumerate(points):
-                    marker = " ← you are here" if i == cur else ""
-                    lines.append(f"Lesson {i + 1}: {p}{marker}")
+                if is_teach:
+                    cur = row.get("current_outline_point") or 0
+                    for i, p in enumerate(points):
+                        marker = " ← you are here" if i == cur else ""
+                        lines.append(f"Lesson {i + 1}: {p}{marker}")
+                    reference_header = (
+                        "Reference only — the lesson outline below is "
+                        "for your own lookup when the student asks about "
+                        "lesson numbering, what they've covered, or "
+                        "what's next. Do NOT recite, summarize, or "
+                        "reference this list unprompted."
+                    )
+                else:
+                    # Ask mode: no "current" topic, no lesson framing.
+                    for i, p in enumerate(points):
+                        lines.append(f"Topic {i + 1}: {p}")
+                    reference_header = (
+                        "Full topic outline of the document. Use it to "
+                        "answer overview / navigation questions ('what "
+                        "topics does this cover?', 'what's the simplest "
+                        "topic?', 'list the chapters') and as background "
+                        "context. The student is in Ask mode, not in a "
+                        "lesson, so do NOT say things like 'you're "
+                        "currently on Lesson X' or 'next lesson is Y' — "
+                        "there is no current lesson. Do NOT recite the "
+                        "list unprompted; only reference it when the "
+                        "student's question genuinely calls for it."
+                    )
                 outline_block = (
-                    "\n\nReference only — the outline below is for your own "
-                    "lookup when the student explicitly asks about lesson "
-                    "numbering, what they've covered, or what's next. Do "
-                    "NOT recite, summarize, or reference this list "
-                    "unprompted. If the student just greets you or asks "
-                    "something unrelated, ignore it.\n" + "\n".join(lines)
+                    "\n\n" + reference_header + "\n" + "\n".join(lines)
                 )
         except Exception:
             log.exception("answer_question outline lookup failed for session=%s",
@@ -612,15 +673,29 @@ def answer_question(user_id, session_id, document_id, question, level):
         "and ask what they'd like to know. Do NOT summarize the lesson, "
         "introduce topics, or volunteer 'today's lesson is...' unless "
         "they ask. When they do ask a content question, answer using only "
-        "the material provided below. If the material does not cover it, "
-        "say so plainly and do not make anything up. "
+        "the material provided below. If the material does not cover the "
+        "specific fact they asked about, say so plainly and do not make "
+        "anything up. NEVER tell the student that no material came "
+        "through or that the document is empty — the document IS loaded; "
+        "if the material block looks thin it just means the retrieval "
+        "step did not find a tightly matching passage for this question. "
+        "In that case use the outline (when one is provided) plus the "
+        "conversation history to answer as best you can. "
         + LEVELS.get(level, LEVELS["novice"])
         + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
         + outline_block
     )
 
-    msgs = [{"role": m["role"], "content": m["content"]}
-            for m in history if m["content"]]
+    # Trim what we send to Claude. A resumed lesson session can carry
+    # 10+ full lesson texts (~1500 tokens each) plus all prior Q&A — that
+    # makes Claude take noticeably longer than a fresh ask. The recent
+    # turns are what matters for follow-up coherence; older lessons can
+    # be pulled back via RAG when relevant. Keep the last ~20 messages,
+    # which covers a fair amount of recent context without ballooning
+    # the prompt.
+    HISTORY_TAIL = 20
+    recent = [m for m in history if m.get("content")][-HISTORY_TAIL:]
+    msgs = [{"role": m["role"], "content": m["content"]} for m in recent]
     msgs.append({
         "role": "user",
         "content": f"Material:\n{context}\n\nQuestion: {question}",

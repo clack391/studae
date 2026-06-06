@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppBar } from '@/components/ui/AppBar';
 import { Chip } from '@/components/ui/Segmented';
 import { AiBubble, MeBubble } from '@/components/ui/Bubble';
@@ -19,6 +19,7 @@ type Turn = { role: 'user' | 'assistant'; text: string; sources?: Source[] };
 export default function Ask() {
   const C = useTheme();
   const router = useRouter();
+  const qc = useQueryClient();
   const params = useLocalSearchParams<{ documentId: string; sessionId?: string; level?: Level }>();
   const documentId = params.documentId;
 
@@ -31,34 +32,16 @@ export default function Ask() {
 
   const title = dash.data?.documents.find((d) => d.id === documentId)?.title ?? 'Ask';
 
-  // Hydrate the conversation from the backend so prior messages (including
-  // photo-ask answers from the photo screen) show up when the user lands
-  // here. Only runs once per sessionId.
+  // Hydrate the conversation from the backend. Forced to refetch on every
+  // mount and ignore the global staleTime so a navigate-away then back
+  // doesn't show a stale message list.
   const history = useQuery({
     queryKey: ['ask-messages', sessionId],
     queryFn: () => api.sessionMessages(sessionId!, 200),
-    enabled: !!sessionId && !hydrated,
+    enabled: !!sessionId,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
-  useEffect(() => {
-    if (history.data && !hydrated) {
-      // Restore sources from metadata for assistant turns. Backend saves
-      // {sources: [...]} on every /ask reply so figures and page citations
-      // round-trip across screen reloads. Older messages saved before the
-      // metadata write was added simply have metadata=null → no sources,
-      // just the text bubble.
-      const seeded: Turn[] = history.data.messages
-        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
-        .map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          text: m.content as string,
-          sources: m.role === 'assistant' ? (m.metadata?.sources ?? undefined) : undefined,
-        }));
-      setTurns(seeded);
-      setHydrated(true);
-      setTimeout(() => scroller.current?.scrollToEnd({ animated: false }), 50);
-    }
-  }, [history.data, hydrated]);
-
   // Create a fresh session if one wasn't passed.
   const ensureSession = useMutation({
     mutationFn: () => api.createSession({ document_id: documentId, level, mode: 'ask' }),
@@ -73,15 +56,48 @@ export default function Ask() {
       question,
       level,
     }),
-    onSuccess: (r) => {
+    onSuccess: (r, vars) => {
       setTurns((t) => [...t, { role: 'assistant', text: r.answer, sources: r.sources }]);
       setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 50);
+      // Drop the cached message list for this session so re-entering the
+      // ask screen refetches and shows the turn we just sent. Without
+      // this, the user navigates away, comes back within the staleTime,
+      // and the screen rehydrates from a cached response that doesn't
+      // include their most recent turn.
+      qc.invalidateQueries({ queryKey: ['ask-messages', vars.sid] });
     },
     onError: (e: any) => {
       if (on402(e, router, 'question')) return;
       Alert.alert('Ask failed', e?.message ?? '');
     },
   });
+
+  // Re-sync the on-screen turns from the server every time a fresh fetch
+  // completes. Two guards:
+  //   - history.isFetching: while react-query is mid-refetch the value
+  //     it hands us is the previous cached list (which won't include
+  //     the turn the user just sent). Wait for the fresh payload.
+  //   - ask.isPending: while a question is in flight we just appended
+  //     the optimistic user turn locally; don't clobber it with the
+  //     server list (which won't have the assistant reply yet).
+  useEffect(() => {
+    if (!history.data) return;
+    if (history.isFetching) return;
+    if (ask.isPending) return;
+    const seeded: Turn[] = history.data.messages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        text: m.content as string,
+        sources: m.role === 'assistant' ? (m.metadata?.sources ?? undefined) : undefined,
+      }));
+    setTurns(seeded);
+    if (!hydrated) {
+      setHydrated(true);
+      setTimeout(() => scroller.current?.scrollToEnd({ animated: false }), 50);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history.data, history.isFetching, ask.isPending]);
 
   // Lazy session creation. We only create a chat_sessions row on the
   // first send. If the user opens this screen and leaves without asking,
