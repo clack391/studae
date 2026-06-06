@@ -58,7 +58,7 @@ export default function CreateTest() {
   });
 
   const [kind, setKind] = useState<AssessmentKind>('test');
-  const [fmt, setFmt] = useState<AssessmentFormat>('mixed');
+  const [fmt, setFmt] = useState<AssessmentFormat>('objective');
   const [scope, setScope] = useState<Scope>('whole');
   // Multi-select. Empty array means no topic chosen yet (Generate disabled).
   const [topics, setTopics] = useState<string[]>([]);

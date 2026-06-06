@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 
@@ -124,16 +125,43 @@ def _sources_from_search(chunks, snippet_chars=200, document_id=None,
     rows = supabase.table("chunks").select("id, page_number, figure_path") \
         .in_("id", ids).execute().data or []
     meta = {r["id"]: r for r in rows}
+
+    # Single-page document detection. Some PDFs (HTML-to-PDF exports,
+    # web-page printouts like the Monstera care guide) put the entire
+    # document on one giant page. Ingest assigns figures to chunks
+    # positionally (chunk 0 → image 0, chunk 1 → image 1, ...), which
+    # gives correct results on multi-page PDFs (each page is a topic)
+    # but produces totally arbitrary figure-to-topic pairings on
+    # single-page PDFs. There's no clean way to tell which figure
+    # belongs to which topic without re-ingesting with positional
+    # metadata, so we suppress figures entirely on these docs. Users
+    # still get text citations.
+    single_page_doc = False
+    if document_id and user_id:
+        try:
+            pages_res = supabase.table("chunks").select("page_number") \
+                .eq("document_id", document_id).eq("user_id", user_id) \
+                .execute().data or []
+            distinct_pages = {r.get("page_number") for r in pages_res
+                              if r.get("page_number") is not None}
+            if len(distinct_pages) <= 1:
+                single_page_doc = True
+        except Exception:
+            # Don't break the lesson over a probe query — assume
+            # multi-page and let the rest of the filtering handle it.
+            pass
+
     sources = []
     for c in chunks:
         m = meta.get(c["id"], {})
         snippet = clean_snippet(c.get("content") or "", snippet_chars)
-        if not snippet and not m.get("figure_path"):
+        figure_path = None if single_page_doc else m.get("figure_path")
+        if not snippet and not figure_path:
             continue
         sources.append({
             "chunk_id": c["id"],
             "page_number": m.get("page_number"),
-            "figure_path": m.get("figure_path"),
+            "figure_path": figure_path,
             "snippet": snippet,
         })
 
@@ -155,24 +183,69 @@ def _sources_from_search(chunks, snippet_chars=200, document_id=None,
         if kept:
             sources = kept
 
-    if expand_figures and document_id and user_id and sources:
+    # Figure expansion is also unreliable on single-page docs — same
+    # reason: there's no page anchor that ties images to topics, so
+    # pulling extra figures on the "same page" just drags more
+    # unrelated ones in.
+    if expand_figures and not single_page_doc and document_id and user_id and sources:
         page_numbers = sorted({s["page_number"] for s in sources if s.get("page_number") is not None})
         existing_paths = {s["figure_path"] for s in sources if s.get("figure_path")}
         if page_numbers:
-            # Pull every chunk on the relevant pages. We filter for non-null
-            # figure_path in Python because supabase-py's `.not_.is_(...)`
-            # variant is unreliable across versions and silently returns no
-            # rows in some setups.
+            # Pull every chunk on the relevant pages. We also pull the
+            # `content` column so we can apply the topic-keyword filter
+            # to expansion candidates — without that, a single-page PDF
+            # (where the whole lesson lives on page 1 alongside intro
+            # figures) drags every unrelated figure on the page into a
+            # topic-scoped lesson. We filter for non-null figure_path in
+            # Python because supabase-py's `.not_.is_(...)` variant is
+            # unreliable across versions.
             extras = supabase.table("chunks") \
-                .select("id, page_number, figure_path") \
+                .select("id, page_number, figure_path, content") \
                 .eq("document_id", document_id) \
                 .eq("user_id", user_id) \
                 .in_("page_number", page_numbers) \
                 .execute().data or []
+            # Count how many content-bearing chunks live on each page.
+            # Sparse pages (≤ 2 content chunks) are typically composite-
+            # figure pages (e.g. Anthracnose page 7: one paragraph + four
+            # subfigure orphans). Dense pages (many content chunks) are
+            # single-page documents where orphan figures could be from
+            # any topic — we can't tell, so we drop them. The whole-doc
+            # intro/cover figures on the Monstera example fall into this
+            # bucket. The content-chunk-count is the cheapest signal we
+            # have to distinguish the two cases.
+            page_content_count: dict[int | None, int] = {}
+            for r in extras:
+                if (r.get("content") or "").strip():
+                    pn = r.get("page_number")
+                    page_content_count[pn] = page_content_count.get(pn, 0) + 1
+            SPARSE_PAGE_THRESHOLD = 2
+
             for r in extras:
                 fp = r.get("figure_path")
                 if not fp or fp in existing_paths:
                     continue
+                content = (r.get("content") or "").strip()
+                pn = r.get("page_number")
+                if content:
+                    # Content chunk on the same page — only keep if it
+                    # actually mentions the topic. Otherwise it's an
+                    # intro/different-topic chunk that happens to share
+                    # the page.
+                    if topic_keywords:
+                        lc = content.lower()
+                        if not any(kw in lc for kw in topic_keywords):
+                            continue
+                else:
+                    # Orphan figure chunk (no content). Safe to keep ONLY
+                    # if its page is sparse — meaning the orphan is
+                    # almost certainly a subfigure of the matched chunk.
+                    # On dense / mixed-topic pages, the orphan could be
+                    # anything (intro figure, cover image, etc.), so we
+                    # drop it. Without this, single-page PDFs like the
+                    # Monstera guide leak intro figures into every topic.
+                    if page_content_count.get(pn, 0) > SPARSE_PAGE_THRESHOLD:
+                        continue
                 existing_paths.add(fp)
                 # Figure-only supplements: no snippet text since the figure
                 # is what matters. Frontend page-level filter still lets
@@ -185,6 +258,92 @@ def _sources_from_search(chunks, snippet_chars=200, document_id=None,
                     "snippet": "",
                 })
     return sources
+
+
+def _ai_filter_sources(topic: str, lesson_excerpt: str, sources: list) -> list:
+    """Final relevance pass. Sends the topic, a short lesson excerpt, and
+    the candidate sources (with page + snippet + has_figure flag) to
+    Claude Haiku, which returns the ids of the ones that actually relate.
+
+    Handles the case our heuristics can't: orphan figure chunks (empty
+    content) on a multi-topic page. The keyword filter has no text to
+    match against for orphans, so it lets them through, which on a
+    single-page PDF means intro photos drift into every topic. Claude
+    sees the topic + the page numbers + neighbouring snippets and can
+    judge whether an orphan on page X is plausibly part of this topic
+    or a leftover from somewhere else.
+
+    Falls back to the input list on any error so a Haiku hiccup never
+    breaks the lesson. ~$0.0002 per call, ~150-300 ms latency.
+    """
+    if not sources or not topic:
+        return sources
+    # Cap inputs to keep tokens (and cost) tight.
+    snippets = []
+    for i, s in enumerate(sources):
+        snippets.append({
+            "id": i,
+            "page": s.get("page_number"),
+            "has_figure": bool(s.get("figure_path")),
+            # 240 chars is enough to judge topicality. Orphans get an
+            # explicit placeholder so Claude knows what it's looking at.
+            "snippet": (s.get("snippet") or "")[:240] or "(figure only, no caption text)",
+        })
+    prompt = (
+        "You filter source items for a lesson. Each item is a chunk from "
+        "the source PDF that might be cited or rendered as a figure beside "
+        f"the lesson. The lesson topic is: \"{topic}\".\n\n"
+        "Drop items that look like they belong to a different section of "
+        "the document (intro, cover, table of contents, a different "
+        "topic that happens to share a page with this one). Keep items "
+        "that genuinely match the topic.\n\n"
+        "Items marked '(figure only, no caption text)' are figure images "
+        "with no surrounding text. BE STRICT with these: only keep a "
+        "figure-only item if the lesson actively describes a figure / "
+        "diagram / photo that would match it (e.g. the lesson says "
+        "'see the diagram of the leaf' or names a specific visual). If "
+        "the lesson is purely textual (no reference to a figure), drop "
+        "all figure-only items — they're almost certainly intro or "
+        "cover graphics that bled in by sharing a page with topic "
+        "content.\n\n"
+        f"Lesson text:\n{(lesson_excerpt or '')[:1500]}\n\n"
+        f"Items:\n{json.dumps(snippets, ensure_ascii=False)}\n\n"
+        "Return ONLY a JSON object: {\"keep\": [list of item ids to keep]}. "
+        "Empty array is fine — drop everything if nothing genuinely fits."
+    )
+    try:
+        raw = claude.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        ).content[0].text
+        decision = _extract_json_obj(raw)
+        keep = decision.get("keep") if isinstance(decision, dict) else None
+        if not isinstance(keep, list):
+            return sources
+        # Trust an empty keep list — Claude is explicitly saying drop
+        # everything, which is the correct answer when nothing in the
+        # candidate set actually relates to the lesson.
+        keep_set = {i for i in keep if isinstance(i, int)}
+        return [s for i, s in enumerate(sources) if i in keep_set]
+    except Exception as e:
+        log.warning("ai source filter failed, keeping unfiltered: %s: %s",
+                    type(e).__name__, e)
+        return sources
+
+
+def _extract_json_obj(raw: str) -> dict:
+    """Trim markdown fences if present and decode the first JSON object."""
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    start = raw.find("{")
+    if start < 0:
+        return {}
+    obj, _ = json.JSONDecoder().raw_decode(raw[start:])
+    return obj
 
 
 def answer_photo_question(user_id, session_id, document_id,
@@ -493,6 +652,14 @@ def answer_question(user_id, session_id, document_id, question, level):
         for s in sources:
             s["figure_path"] = None
 
+    # Final relevance pass: Claude Haiku double-checks each source against
+    # the question + the answer it just generated, and drops items that
+    # actually belong to a different section of the document (e.g. an
+    # intro figure that shares page 1 with on-topic content). Skipped
+    # for trivial / small-talk asks where there are no sources anyway.
+    if sources:
+        sources = _ai_filter_sources(question, reply, sources)
+
     # Persist sources alongside the assistant reply so the transcript view
     # can replay the same figures + page citations later, without re-
     # running RAG (which is non-deterministic across embedding refreshes
@@ -638,7 +805,8 @@ def teach_next(user_id, session_id):
             else:
                 # Older lessons (pre-metadata column) won't have saved
                 # sources. Re-run RAG once to rebuild them so the peek
-                # still shows figures and material citations.
+                # still shows figures and material citations, then run
+                # the same AI relevance pass we apply to fresh lessons.
                 chunks = search_chunks(user_id, session["document_id"], topic)
                 sources = _sources_from_search(
                     chunks,
@@ -647,6 +815,7 @@ def teach_next(user_id, session_id):
                     expand_figures=True,
                     topic_keywords=_topic_keywords(topic) or None,
                 )
+                sources = _ai_filter_sources(topic, cached[0]["content"], sources)
             return {"done": False, "topic": topic,
                     "lesson": cached[0]["content"],
                     "progress": f"{idx + 1} of {len(points)}",
@@ -688,6 +857,13 @@ def teach_next(user_id, session_id):
         expand_figures=True,
         topic_keywords=_topic_keywords(topic) or None,
     )
+    # Final relevance pass: Claude Haiku checks each source against the
+    # generated lesson and drops items that don't actually belong. This
+    # is the safety net for cases the heuristics can't decide — most
+    # notably orphan figure chunks on single-page PDFs where every chunk
+    # shares page 1 but unrelated intro photos sit there too. Returns
+    # the input unchanged if the call errors out.
+    sources = _ai_filter_sources(topic, lesson, sources)
     # Persist sources alongside the lesson so the transcript and the cached
     # peek can render the same figures + material citations without re-
     # running RAG. Column is jsonb on Postgres.

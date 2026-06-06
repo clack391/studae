@@ -1454,6 +1454,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "google-genai" },
     { name = "pyjwt" },
@@ -1469,6 +1470,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.105.2" },
+    { name = "cryptography", specifier = ">=42.0.0" },
     { name = "fastapi", specifier = ">=0.128.8" },
     { name = "google-genai", specifier = ">=1.47.0" },
     { name = "pyjwt", specifier = ">=2.13.0" },
