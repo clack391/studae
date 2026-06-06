@@ -346,10 +346,190 @@ def _extract_json_obj(raw: str) -> dict:
     return obj
 
 
+_PHOTO_INTENT_ANSWER = re.compile(
+    r"\b(answer|answers|solve|solution|result|results|"
+    r"do (this|these|them|it)|complete (this|these|them|it)|"
+    r"give (me )?(the )?(answer|answers|solution))\b",
+    re.IGNORECASE,
+)
+
+_PHOTO_INTENT_EXPLAIN = re.compile(
+    r"\b(explain|explanation|teach|walk (me )?through|"
+    r"show (me )?how|step by step|step-by-step|"
+    r"work (this|these|it) out|help (me )?understand|"
+    r"how (do|does|should) (i|we)|why)\b",
+    re.IGNORECASE,
+)
+
+_PHOTO_INTENT_CHECK = re.compile(
+    r"\b(check|mark|grade|did (i|we) get|is (my|this) (right|correct|wrong)|"
+    r"verify|am i (right|correct|wrong))\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_photo_intent(typed_prompt: str) -> str:
+    """Classify what the student wants done with the photographed work.
+
+    Returns one of:
+      'answer'  — give direct answers (one-line answer + brief reasoning)
+      'explain' — show the working, step by step
+      'check'   — verify their already-written answers
+      'ask'     — intent is unclear; ask the student before doing anything
+
+    Detection is keyword-based on the typed prompt. Empty prompt → 'ask'."""
+    text = (typed_prompt or "").strip()
+    if not text:
+        return "ask"
+    # Check / verify takes priority because phrases like "is this correct?"
+    # contain none of the other keywords.
+    if _PHOTO_INTENT_CHECK.search(text):
+        return "check"
+    if _PHOTO_INTENT_EXPLAIN.search(text):
+        return "explain"
+    if _PHOTO_INTENT_ANSWER.search(text):
+        return "answer"
+    return "ask"
+
+
+def _tag_question_with_topic(question: str, outline_text: str,
+                             prior_assistant: str = "") -> str:
+    """One Haiku call that picks the document outline entry that the
+    student's typed question most likely belongs to. Returns the topic
+    string ("Anthracnose"), or "" when no entry fits or the call errors.
+    The caller then fuses the topic into the RAG query so retrieval
+    lands on the right section even when the question's wording is
+    vague ("how do you spread it") or terse ("symptoms?").
+
+    `prior_assistant` is the most recent assistant turn — useful when
+    the current question is a pronoun-heavy follow-up ('what about it?',
+    'tell me more') and the topic must be inferred from context."""
+    q = (question or "").strip()
+    if not q or not outline_text.strip():
+        return ""
+    context_clause = (
+        f"\nPrevious assistant message (use this if the question is a "
+        f"vague follow-up like 'what about it?' or 'tell me more'):\n"
+        f"{prior_assistant[:600]}\n"
+        if prior_assistant else ""
+    )
+    prompt = (
+        "You are matching a student's question to a topic in a "
+        "document outline. Return exactly the outline entry that the "
+        "question most likely belongs to. If nothing in the outline "
+        "fits, return an empty string.\n\n"
+        f"Student question: {q}{context_clause}\n"
+        f"Outline:\n{outline_text}\n\n"
+        "Return ONLY a JSON object: {\"topic\": \"...\"} (use the "
+        "outline entry verbatim, or an empty string)."
+    )
+    try:
+        raw = claude.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+        ).content[0].text
+        decision = _extract_json_obj(raw)
+        topic = str(decision.get("topic") or "").strip() if isinstance(decision, dict) else ""
+        return topic
+    except Exception as e:
+        log.warning("topic-tagging failed, falling back to bare RAG: %s: %s",
+                    type(e).__name__, e)
+        return ""
+
+
+def _extract_questions_from_photo(image_b64: str, media_type: str,
+                                  typed_prompt: str,
+                                  outline_text: str = "") -> list[dict]:
+    """Vision pass to pull every question off a photographed page AND tag
+    each with the most likely matching topic from the document outline.
+
+    Returns a list of dicts: [{"question": "...", "topic": "..."}, ...]
+    Topic may be "" if no outline was provided or no entry plausibly
+    matches. The downstream caller fuses topic + question into the RAG
+    query so retrieval lands on the right chapter even when the question
+    uses different wording than the chunk.
+
+    On any failure we fall back to [{"question": typed_prompt or "",
+    "topic": ""}] so the rest of the pipeline still runs.
+    """
+    fallback = [{"question": (typed_prompt or "").strip(), "topic": ""}]
+    outline_clause = (
+        "\n\nDocument outline (one topic per line). Use this to set the "
+        "'topic' field on each question — pick the closest matching "
+        "entry, or leave it empty when nothing fits:\n" + outline_text
+        if outline_text.strip() else
+        "\n\nNo outline was provided; leave the 'topic' field as an "
+        "empty string for every question."
+    )
+    prompt = (
+        "You are looking at a photo of a study page (textbook, "
+        "worksheet, handwritten notes). Pull out every distinct question "
+        "the student would need to answer. Include diagram-based "
+        "prompts ('Identify the structure shown', 'Label the parts'). "
+        "Do NOT rewrite or rephrase the question itself — copy each one "
+        "as faithfully as you can. For each question, also pick the "
+        "topic from the document outline that the question most likely "
+        "belongs to (this helps the next step retrieve the right chunk "
+        "even if the question uses different words than the document).\n"
+        f"\nStudent's typed prompt (may be empty): "
+        f"{typed_prompt or '(none)'}"
+        + outline_clause + "\n\n"
+        "Return ONLY a JSON object: "
+        "{\"questions\":[{\"question\":\"...\", \"topic\":\"...\"}, ...]}"
+    )
+    try:
+        raw = claude.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=1500,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": media_type,
+                        "data": image_b64}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        ).content[0].text
+        decision = _extract_json_obj(raw)
+        items = decision.get("questions") if isinstance(decision, dict) else None
+        if not isinstance(items, list):
+            return fallback
+        out = []
+        for item in items:
+            if isinstance(item, dict):
+                q = str(item.get("question") or "").strip()
+                t = str(item.get("topic") or "").strip()
+            else:
+                # Tolerate the old plain-string shape just in case.
+                q = str(item).strip()
+                t = ""
+            if q:
+                out.append({"question": q, "topic": t})
+        return out or fallback
+    except Exception as e:
+        log.warning("photo question extraction failed, falling back: %s: %s",
+                    type(e).__name__, e)
+        return fallback
+
+
 def answer_photo_question(user_id, session_id, document_id,
                           image_bytes: bytes, media_type: str,
                           question: str, level: str):
-    """Ask Claude a question grounded in a photo plus the document material.
+    """Ask Claude a question (or several) grounded in a photo + the
+    document material.
+
+    Pipeline:
+      1. Haiku vision pass — extract every question on the photo into a
+         list. Lets multi-question worksheets work: each question gets
+         its own grounding instead of one shared RAG over the typed
+         prompt.
+      2. Per-question RAG — vector search the document with each
+         extracted question independently, dedupe chunks across them.
+      3. Sonnet answer pass — single call with the photo + a per-
+         question material block. Sonnet answers them all in one reply
+         with clear headers, grounded by the right chunks.
 
     Uses Claude's vision capability directly instead of pre-OCRing the
     image. The old flow extracted text from the photo via Gemini and then
@@ -359,52 +539,225 @@ def answer_photo_question(user_id, session_id, document_id,
     """
     import base64
     require_session(session_id, user_id)
-    chunks = search_chunks(user_id, document_id, question)
-    context = context_from(chunks)
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+
+    # Read what the student wants done with the photo. Empty prompt or
+    # ambiguous wording (e.g. just "hi" or "look at this") falls into
+    # the 'ask' branch — we list the questions back and let them pick.
+    intent = _detect_photo_intent(question)
+
+    # Load the document outline once. Used both for the vision-extraction
+    # step (so Haiku can tag each question with the matching topic) and
+    # for Sonnet's system prompt (so it knows what the doc covers even
+    # when a specific question's RAG comes back thin).
+    outline_text = ""
+    if document_id:
+        try:
+            doc_row = supabase.table("documents").select("outline") \
+                .eq("id", document_id).eq("user_id", user_id) \
+                .execute().data
+            if doc_row:
+                outline_text = (doc_row[0].get("outline") or "").strip()
+        except Exception:
+            log.exception("ask-photo outline lookup failed for document=%s",
+                          document_id)
+
+    # Step 1: pull every question off the page WITH a topic tag per
+    # question. The topic comes from the outline above, so the search
+    # query in step 2 is anchored on the right chapter even when the
+    # question's wording doesn't match the chunk's wording.
+    extracted_items = _extract_questions_from_photo(
+        b64, media_type, question, outline_text)
+    extracted = [item["question"] for item in extracted_items]
+    extracted_topics = [item.get("topic", "") for item in extracted_items]
+
+    # Ask-first branch: skip RAG + Sonnet entirely and just confirm what
+    # the student wants. Costs one Haiku vision call instead of the full
+    # pipeline.
+    if intent == "ask" and extracted and any(q for q in extracted):
+        bullet = "\n".join(f"  {i + 1}. {q}" for i, q in enumerate(extracted) if q)
+        reply = (
+            f"I can see {len(extracted)} question"
+            f"{'s' if len(extracted) != 1 else ''} on this page:\n\n"
+            f"{bullet}\n\n"
+            "What would you like me to do?\n"
+            "• Answer them directly (just say 'answer')\n"
+            "• Walk through each one step by step (say 'explain')\n"
+            "• Check your work if you've already written answers (say 'check')"
+        )
+        supabase.table("messages").insert([
+            {"session_id": session_id, "user_id": user_id,
+             "role": "user",
+             "content": f"[photo: {len(extracted)} questions] {question or ''}".strip()},
+            {"session_id": session_id, "user_id": user_id,
+             "role": "assistant", "content": reply,
+             "metadata": {"sources": []}},
+        ]).execute()
+        return reply, []
+
+    # Step 2: per-question RAG. The query for each question fuses the
+    # question text with its predicted topic ("Anthracnose: What causes
+    # this disease?") so vector search lands on the right chapter even
+    # when the question's wording is different from the chunk's wording.
+    # If the fused query still returns nothing, retry with the topic name
+    # alone — that almost always hits the chapter intro chunks. As a
+    # final fallback, retry with just the question text. We dedupe
+    # chunks across questions to keep the prompt tight.
+    seen_ids = set()
+    all_chunks = []
+    per_q_chunks = []
+    for q, topic in zip(extracted, extracted_topics):
+        chunks_q = []
+        if q and topic:
+            chunks_q = search_chunks(user_id, document_id, f"{topic}: {q}")
+        elif q:
+            chunks_q = search_chunks(user_id, document_id, q)
+        # Retry with just the topic if the topic-fused query missed.
+        if not chunks_q and topic:
+            chunks_q = search_chunks(user_id, document_id, topic)
+        # Final fallback: bare question (only if we tried a fused query
+        # first and that missed).
+        if not chunks_q and q and topic:
+            chunks_q = search_chunks(user_id, document_id, q)
+        per_q_chunks.append(chunks_q)
+        for c in chunks_q:
+            if c["id"] not in seen_ids:
+                seen_ids.add(c["id"])
+                all_chunks.append(c)
+
+    # Per-question material block for the prompt. Empty material is
+    # explicit so Sonnet knows to answer from the photo alone there.
+    material_blocks = []
+    for i, (q, chunks_q) in enumerate(zip(extracted, per_q_chunks), start=1):
+        label = q if q else f"(question {i} — no typed prompt)"
+        if chunks_q:
+            material_blocks.append(
+                f"--- Question {i}: {label}\n"
+                f"Relevant material:\n{context_from(chunks_q)}\n"
+            )
+        else:
+            material_blocks.append(
+                f"--- Question {i}: {label}\n"
+                f"Relevant material: (none — answer from the photo and "
+                f"your understanding of the document outline)\n"
+            )
+    material_section = "\n".join(material_blocks) if material_blocks else (
+        "(no questions could be extracted from the photo — describe what "
+        "is shown and offer to help)"
+    )
+
+    multi = len(extracted) > 1
+
+    # Intent shapes the answer style. 'answer' is direct, 'explain' is
+    # step-by-step, 'check' compares the student's visible answer to the
+    # right one. For single-question photos the intent defaults to
+    # 'answer' if the student typed nothing identifiable (the ask-first
+    # branch above already covered the multi-question unclear case).
+    if intent == "ask":
+        intent = "answer"
+
+    intent_clause = {
+        "answer": (
+            "Give a direct answer first, then one or two sentences of "
+            "reasoning. Do not pad with background."
+        ),
+        "explain": (
+            "Walk through each question step by step. Show the reasoning "
+            "in clear stages so the student can learn the method, then "
+            "state the final answer."
+        ),
+        "check": (
+            "Look at the student's written answer in the photo. Decide "
+            "whether it's correct, partially correct, or wrong. State "
+            "the verdict, then explain what's right or wrong and what "
+            "the correct answer should be."
+        ),
+    }[intent]
+
+    answer_format_clause = (
+        "Answer EACH question separately. For each, write a clear "
+        "heading like '**Question 1:** <restate the question>' on its "
+        "own line, then the answer below. If a question is best "
+        "answered visually (anatomy / disease / diagram), reference "
+        "what the photo shows."
+        if multi else
+        "Answer the question grounded in the material. If the question "
+        "is visual, reference what the photo shows."
+    )
+
+    outline_clause = (
+        "\n\nDocument outline (every topic the doc covers, for your "
+        "reference when a question's material block is thin):\n"
+        + outline_text
+        if outline_text else ""
+    )
 
     system = (
-        "You are a study tutor. The student has attached a photo and is "
-        "asking about it. Use both the photo and the document material below. "
-        "If the material doesn't cover what's in the photo, explain from the "
-        "photo alone. " + LEVELS.get(level, LEVELS["novice"])
+        "You are a study tutor. The student has attached a photo of a "
+        "study page. The photo contains one or more questions, listed "
+        "out with their relevant material below. Use the photo, the "
+        "per-question material blocks, and the document outline. "
+        + intent_clause + " "
+        "If a question's material block is empty or doesn't actually "
+        "cover the question, say so PLAINLY for that question (\"the "
+        "material does not cover this specific point\") and then answer "
+        "from the photo and outline alone — do NOT make up specifics "
+        "the material doesn't support, and do NOT claim no material "
+        "came through; the document IS loaded. "
+        + answer_format_clause + " "
+        + LEVELS.get(level, LEVELS["novice"])
         + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
+        + outline_clause
     )
 
     history = supabase.table("messages").select("role, content") \
         .eq("session_id", session_id).order("created_at").execute().data or []
-    msgs = [{"role": m["role"], "content": m["content"]}
-            for m in history if m["content"]]
+    HISTORY_TAIL = 20
+    recent_hist = [m for m in history if m.get("content")][-HISTORY_TAIL:]
+    msgs = [{"role": m["role"], "content": m["content"]} for m in recent_hist]
 
-    b64 = base64.b64encode(image_bytes).decode("ascii")
+    user_text = (
+        f"Material (organised per question):\n{material_section}\n\n"
+        f"Student's typed prompt: {question or '(none)'}"
+    )
     msgs.append({
         "role": "user",
         "content": [
             {"type": "image", "source": {
                 "type": "base64", "media_type": media_type, "data": b64}},
-            {"type": "text", "text": f"Material:\n{context}\n\nQuestion: {question}"},
+            {"type": "text", "text": user_text},
         ],
     })
 
+    # Bigger max_tokens for multi-question pages since each answer adds
+    # length. Caps at 3000 so we don't burn budget on a single-question
+    # reply.
+    max_tokens = min(3000, 800 + 600 * len(extracted))
+
     reply = claude.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1500,
+        max_tokens=max_tokens,
         system=system,
         messages=msgs,
     ).content[0].text
 
-    # /ask-photo: student handed over a photo and is asking about it.
-    # Always keep figure_paths in the sources here, since the question is
-    # implicitly visual.
-    sources = _sources_from_search(chunks, document_id=document_id, user_id=user_id)
+    # /ask-photo: student handed over a photo. Always keep figure_paths
+    # in sources here — the question is implicitly visual.
+    sources = _sources_from_search(
+        all_chunks, document_id=document_id, user_id=user_id)
 
     # Persist text-only versions for the chat transcript. We deliberately
-    # do not re-store the image bytes in messages: subsequent turns rely on
-    # the document chunks plus the student's typed follow-up, not on
-    # re-feeding the same photo every turn. Sources are saved into
-    # metadata so the transcript can replay figures + page citations.
+    # do not re-store the image bytes in messages: subsequent turns rely
+    # on the document chunks plus the student's typed follow-up. Sources
+    # land in metadata so the transcript can replay figures + citations.
+    transcript_question = (
+        f"[photo: {len(extracted)} questions] {question}"
+        if multi else
+        f"[photo] {question}"
+    )
     supabase.table("messages").insert([
         {"session_id": session_id, "user_id": user_id,
-         "role": "user", "content": f"[photo] {question}"},
+         "role": "user", "content": transcript_question},
         {"session_id": session_id, "user_id": user_id,
          "role": "assistant", "content": reply,
          "metadata": {"sources": sources}},
@@ -548,56 +901,69 @@ def answer_question(user_id, session_id, document_id, question, level):
     history = supabase.table("messages").select("role, content") \
         .eq("session_id", session_id).order("created_at").execute().data or []
 
+    # Load the document outline once at the top — used for topic-tagging
+    # the question (sharper RAG), as a fallback context when RAG misses,
+    # and (further down) for the system-prompt outline_block.
+    outline_text = ""
+    if document_id:
+        try:
+            doc = supabase.table("documents").select("outline") \
+                .eq("id", document_id).eq("user_id", user_id) \
+                .execute().data
+            if doc:
+                outline_text = (doc[0].get("outline") or "").strip()
+        except Exception:
+            log.exception("ask outline lookup failed for document=%s",
+                          document_id)
+
     skip_rag = _is_trivial_message(question)
     if skip_rag:
         chunks = []
     else:
-        # Pronoun resolution for RAG. The LLM sees full history so it
-        # understands "can I see a picture of it" → "of anthracnose". The
-        # embedding step is stateless though: it just embeds the literal
-        # current question, which for short pronoun-heavy follow-ups
-        # ("can i see a picture of it") lands on whatever page has the
-        # closest generic-visual chunk (usually the cover). Fix by
-        # prepending the most recent user question + assistant reply to
-        # the embedding query. Truncated so a long lesson doesn't drown
-        # the actual question.
+        # Pronoun resolution helper: the LLM sees the conversation, but the
+        # embedding step is stateless. Prepend recent turns to anchor the
+        # query when the question is a pronoun-heavy follow-up.
         prior_user = next((m["content"] for m in reversed(history)
                            if m["role"] == "user" and m["content"]), "")
         prior_asst = next((m["content"] for m in reversed(history)
                            if m["role"] == "assistant" and m["content"]), "")
-        rag_query = question
-        if prior_user or prior_asst:
-            rag_query = " ".join([
-                prior_asst[:400],
-                prior_user[:200],
-                question,
-            ]).strip()
-        chunks = search_chunks(user_id, document_id, rag_query)
 
-    # If RAG came back empty AND we didn't deliberately skip it (trivial
-    # greeting), fall back to the document outline. Otherwise Claude sees
-    # "(no material retrieved)" as the material and confidently tells
-    # the student the document is empty — even though the document is
-    # there and the student is asking a meta-question that RAG just
-    # couldn't anchor to a chunk (e.g. "What is the simplest topic in
-    # this material?"). The outline always covers the whole document so
-    # it's a safe fallback for meta-questions.
+        # Topic-tag the question against the outline so the RAG query is
+        # anchored on the right section even when wording is vague. Same
+        # pattern /ask-photo uses. ~$0.0001, ~150 ms.
+        topic = _tag_question_with_topic(question, outline_text, prior_asst)
+
+        # Build the RAG query. Prefer the topic-fused form, fall back to
+        # the pronoun-resolved form if no topic was identified.
+        if topic:
+            rag_query = f"{topic}: {question}"
+        else:
+            rag_query = question
+            if prior_user or prior_asst:
+                rag_query = " ".join([
+                    prior_asst[:400],
+                    prior_user[:200],
+                    question,
+                ]).strip()
+        chunks = search_chunks(user_id, document_id, rag_query)
+        # Retry chain — same idea as /ask-photo. Topic-only catches the
+        # chapter intro chunks; bare question is the last resort.
+        if not chunks and topic:
+            chunks = search_chunks(user_id, document_id, topic)
+        if not chunks and topic:
+            chunks = search_chunks(user_id, document_id, question)
+
+    # If RAG STILL came back empty AND we didn't deliberately skip it
+    # (trivial greeting), fall back to the document outline as the
+    # material context. The outline always covers the whole document so
+    # it's a safe fallback for meta-questions like "what's the simplest
+    # topic?" Without this, Claude reads "(no material retrieved)" and
+    # tells the student the document is empty.
     if chunks:
         context = context_from(chunks)
     elif skip_rag:
         context = "(no material retrieved)"
     else:
-        outline_text = ""
-        if document_id:
-            try:
-                doc = supabase.table("documents").select("outline") \
-                    .eq("id", document_id).eq("user_id", user_id) \
-                    .execute().data
-                if doc:
-                    outline_text = (doc[0].get("outline") or "").strip()
-            except Exception:
-                log.exception("ask outline fallback lookup failed for document=%s",
-                              document_id)
         context = (
             f"Outline of the full document (RAG found no specific match for "
             f"the question — use this overview to answer):\n{outline_text}"
