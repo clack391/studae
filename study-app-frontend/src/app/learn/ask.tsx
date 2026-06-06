@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 import { AppBar } from '@/components/ui/AppBar';
 import { Chip } from '@/components/ui/Segmented';
 import { AiBubble, MeBubble } from '@/components/ui/Bubble';
@@ -14,6 +15,20 @@ import { on402 } from '@/lib/upgrade';
 import { useTheme } from '@/lib/theme';
 import type { Level, Source } from '@/lib/types';
 
+// Short labels for the AppBar chip — full names ('Professional') wrap
+// on narrow screens against a long document title.
+const LEVEL_CHIP_LABEL: Record<Level, string> = {
+  novice: 'Novice',
+  amateur: 'Amateur',
+  professional: 'Pro',
+};
+
+const LEVEL_OPTIONS: { value: Level; label: string; sub: string }[] = [
+  { value: 'novice', label: 'Novice', sub: 'Simple, friendly, lots of examples' },
+  { value: 'amateur', label: 'Amateur', sub: 'Balanced, less hand-holding' },
+  { value: 'professional', label: 'Professional', sub: 'Precise, terse, closer to source' },
+];
+
 type Turn = { role: 'user' | 'assistant'; text: string; sources?: Source[] };
 
 export default function Ask() {
@@ -24,7 +39,26 @@ export default function Ask() {
   const documentId = params.documentId;
 
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard() });
-  const [level] = useState<Level>(params.level ?? 'novice');
+  // Initial level: explicit param > user's saved preference > novice.
+  // After mount, the user can tap the level chip in the AppBar to switch.
+  const [level, setLevel] = useState<Level>(
+    params.level ?? dash.data?.preferred_level ?? 'novice',
+  );
+  // Sync once when dashboard loads (user landed before their preferred
+  // level was known and there was no explicit param).
+  useEffect(() => {
+    if (params.level) return;
+    if (dash.data?.preferred_level && level === 'novice'
+        && dash.data.preferred_level !== 'novice') {
+      setLevel(dash.data.preferred_level);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dash.data?.preferred_level]);
+
+  const [levelPickerOpen, setLevelPickerOpen] = useState(false);
+  function pickLevel() {
+    setLevelPickerOpen(true);
+  }
   const [sessionId, setSessionId] = useState<string | undefined>(params.sessionId);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -119,7 +153,17 @@ export default function Ask() {
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: C.paper }}>
-      <AppBar back title={title} right={<Chip label={level[0].toUpperCase() + level.slice(1)} on />} />
+      <AppBar
+        back
+        title={title}
+        right={
+          <Chip
+            label={LEVEL_CHIP_LABEL[level]}
+            on
+            onPress={pickLevel}
+          />
+        }
+      />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         // Force padding-based offset on both platforms. Expo Go's Android
@@ -153,6 +197,86 @@ export default function Ask() {
           sending={ask.isPending || ensureSession.isPending}
         />
       </KeyboardAvoidingView>
+
+      {/* Premium-styled level picker. Bottom sheet over a dimmed scrim,
+          ink border + accent highlight on the current level. Replaces
+          the default OS Alert which felt off-brand. */}
+      <Modal
+        transparent
+        visible={levelPickerOpen}
+        animationType="fade"
+        onRequestClose={() => setLevelPickerOpen(false)}
+      >
+        <Pressable
+          onPress={() => setLevelPickerOpen(false)}
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <Pressable
+            onPress={() => {/* swallow taps inside sheet */}}
+            style={{
+              backgroundColor: C.card,
+              borderTopWidth: 2,
+              borderLeftWidth: 2,
+              borderRightWidth: 2,
+              borderColor: C.ink,
+              borderTopLeftRadius: 22,
+              borderTopRightRadius: 22,
+              paddingHorizontal: 16,
+              paddingTop: 18,
+              paddingBottom: 28,
+              gap: 12,
+            }}
+          >
+            <View style={{ alignItems: 'center' }}>
+              <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: C.line, marginBottom: 12 }} />
+            </View>
+            <T v="handH2">Answer level</T>
+            <T v="small" style={{ marginBottom: 6 }}>
+              How should Studae talk to you?
+            </T>
+            {LEVEL_OPTIONS.map((opt) => {
+              const on = level === opt.value;
+              return (
+                <Pressable
+                  key={opt.value}
+                  onPress={() => {
+                    setLevel(opt.value);
+                    setLevelPickerOpen(false);
+                  }}
+                  style={{
+                    borderWidth: 1.6,
+                    borderColor: on ? C.accent : C.line,
+                    backgroundColor: on ? C.accentSoft : 'transparent',
+                    borderRadius: 14,
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 12,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <T v="bodyB" style={{ color: on ? C.accentInk : C.ink }}>{opt.label}</T>
+                    <T v="small">{opt.sub}</T>
+                  </View>
+                  {on ? (
+                    <Ionicons name="checkmark-circle" size={22} color={C.accent} />
+                  ) : (
+                    <View style={{
+                      width: 22, height: 22, borderRadius: 11,
+                      borderWidth: 1.6, borderColor: C.line,
+                    }} />
+                  )}
+                </Pressable>
+              );
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
