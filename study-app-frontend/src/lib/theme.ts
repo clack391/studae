@@ -94,20 +94,35 @@ export const R = { sm: 6, md: 10, lg: 14, xl: 18, pill: 999 } as const;
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+// Text-size override for the whole app. 1.0 = the default sizes baked
+// into T variants; 1.18 = "larger text" mode. The T component multiplies
+// every variant's fontSize / lineHeight / paddingBottom by this scale.
+// Two levels keeps the toggle simple — on/off — while still making a
+// visible difference on small screens.
+export const TEXT_SCALE_DEFAULT = 1.0;
+export const TEXT_SCALE_LARGE = 1.18;
+
 type ThemeCtx = {
   colors: Palette;
   mode: ThemeMode;
   resolved: 'light' | 'dark';
   setMode: (m: ThemeMode) => void;
+  largerText: boolean;
+  setLargerText: (v: boolean) => void;
+  textScale: number;
 };
 
 const STORAGE_KEY = 'studae.themeMode';
+const TEXT_KEY = 'studae.largerText';
 
 const Ctx = createContext<ThemeCtx>({
   colors: LIGHT,
   mode: 'system',
   resolved: 'light',
   setMode: () => {},
+  largerText: false,
+  setLargerText: () => {},
+  textScale: TEXT_SCALE_DEFAULT,
 });
 
 export function useTheme(): Palette {
@@ -118,14 +133,24 @@ export function useThemeMode(): ThemeCtx {
   return useContext(Ctx);
 }
 
+// Cheap convenience hook for components that only need the scale (T).
+export function useTextScale(): number {
+  return useContext(Ctx).textScale;
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const system = useColorScheme();
   const [mode, setModeState] = useState<ThemeMode>('system');
+  const [largerText, setLargerTextState] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((v) => {
-      if (v === 'light' || v === 'dark' || v === 'system') setModeState(v);
+    Promise.all([
+      AsyncStorage.getItem(STORAGE_KEY),
+      AsyncStorage.getItem(TEXT_KEY),
+    ]).then(([m, t]) => {
+      if (m === 'light' || m === 'dark' || m === 'system') setModeState(m);
+      if (t === '1') setLargerTextState(true);
       setHydrated(true);
     });
   }, []);
@@ -134,11 +159,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setModeState(m);
     AsyncStorage.setItem(STORAGE_KEY, m).catch(() => {});
   }
+  function setLargerText(v: boolean) {
+    setLargerTextState(v);
+    AsyncStorage.setItem(TEXT_KEY, v ? '1' : '0').catch(() => {});
+  }
 
   const resolved: 'light' | 'dark' = mode === 'system'
     ? (system === 'dark' ? 'dark' : 'light')
     : mode;
   const colors = resolved === 'dark' ? DARK : LIGHT;
+  const textScale = largerText ? TEXT_SCALE_LARGE : TEXT_SCALE_DEFAULT;
 
   // Set the native window background so the OS doesn't paint a white frame
   // during stack transitions (e.g. when the user presses the phone's back
@@ -150,7 +180,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   if (!hydrated) return null;
 
-  return createElement(Ctx.Provider, { value: { colors, mode, resolved, setMode } }, children);
+  return createElement(
+    Ctx.Provider,
+    {
+      value: {
+        colors, mode, resolved, setMode,
+        largerText, setLargerText, textScale,
+      },
+    },
+    children,
+  );
 }
 
 // Legacy static export. Kept so that any code that still references `C` keeps

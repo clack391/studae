@@ -125,6 +125,7 @@ export default function Me() {
   const router = useRouter();
   const qc = useQueryClient();
   const { session } = useAuth();
+  const { largerText, setLargerText } = useThemeMode();
   const access = useQuery({ queryKey: ['access'], queryFn: () => api.meAccess() });
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard() });
   useFocusEffect(useCallback(() => { access.refetch(); dash.refetch(); }, []));
@@ -229,7 +230,7 @@ export default function Me() {
               <T v="bodyB">Larger text</T>
               <T v="mut">Increase reading size</T>
             </Col>
-            <TtsToggle on={false} onChange={() => Alert.alert('Coming soon', 'Text-size override lands in the next update.')} />
+            <TtsToggle on={largerText} onChange={setLargerText} />
           </Row>
         </Card>
 
