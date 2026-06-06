@@ -1,10 +1,11 @@
-import { useCallback } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Pressable, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { AppBar, IconButton } from '@/components/ui/AppBar';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
 import { Card, Col, Row, Divider } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -54,6 +55,7 @@ export default function Home() {
   const router = useRouter();
   const qc = useQueryClient();
   const { session } = useAuth();
+  const [notifOpen, setNotifOpen] = useState(false);
   const dash = useQuery({
     queryKey: ['dashboard'],
     queryFn: () => api.dashboard(),
@@ -137,7 +139,7 @@ export default function Home() {
       <View style={{ flex: 1, backgroundColor: C.paper }}>
         <AppBar brand right={<IconButton
               name="notifications-outline"
-              onPress={() => Alert.alert('Notifications', "You're all caught up. Reminders and new-content alerts land in the next update.")}
+              onPress={() => setNotifOpen(true)}
             />} />
         <Screen>
           <View style={{ alignItems: 'center', gap: 18, paddingTop: 28 }}>
@@ -163,6 +165,16 @@ export default function Home() {
             />
           </View>
         </Screen>
+        <ConfirmSheet
+          visible={notifOpen}
+          tone="neutral"
+          singleAction
+          title="Notifications"
+          message="You're all caught up. Reminders and new-content alerts land in the next update."
+          confirmLabel="Got it"
+          onConfirm={() => {}}
+          onCancel={() => setNotifOpen(false)}
+        />
       </View>
     );
   }
@@ -177,7 +189,7 @@ export default function Home() {
           <Row>
             <IconButton
               name="notifications-outline"
-              onPress={() => Alert.alert('Notifications', "You're all caught up. Reminders and new-content alerts land in the next update.")}
+              onPress={() => setNotifOpen(true)}
             />
             <View
               style={{
@@ -336,6 +348,16 @@ export default function Home() {
 
         <Button label="+  Upload a chapter" kind="ghost" block onPress={() => router.push('/upload')} />
       </Screen>
+      <ConfirmSheet
+        visible={notifOpen}
+        tone="neutral"
+        singleAction
+        title="Notifications"
+        message="You're all caught up. Reminders and new-content alerts land in the next update."
+        confirmLabel="Got it"
+        onConfirm={() => {}}
+        onCancel={() => setNotifOpen(false)}
+      />
     </View>
   );
 }

@@ -170,6 +170,10 @@ export interface LessonNextResponse {
   lesson: string;
   progress?: string;
   sources?: Source[];
+  // Level the session was originally created with. The teach screen
+  // forwards this to the Ask button so a mid-lesson chat inherits the
+  // lesson's level instead of falling back to the user's preferred.
+  level?: Level;
 }
 
 // --- /assessment/estimate -----------------------------------------------

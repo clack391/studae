@@ -39,15 +39,18 @@ export default function Ask() {
   const documentId = params.documentId;
 
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard() });
-  // Initial level: explicit param > user's saved preference > novice.
-  // After mount, the user can tap the level chip in the AppBar to switch.
+  // Level is LOCKED when the caller passed one in (history resume,
+  // mid-lesson Ask, post-photo redirect). The chip shows it but tapping
+  // does nothing — the level for a resumed conversation belongs to the
+  // session that created it, not to a stray tap during review.
+  // When NOT locked (fresh /Ask from the library), the chip is tappable
+  // and the user can switch via the bottom-sheet picker.
+  const levelLocked = !!params.level;
   const [level, setLevel] = useState<Level>(
     params.level ?? dash.data?.preferred_level ?? 'novice',
   );
-  // Sync once when dashboard loads (user landed before their preferred
-  // level was known and there was no explicit param).
   useEffect(() => {
-    if (params.level) return;
+    if (levelLocked) return;
     if (dash.data?.preferred_level && level === 'novice'
         && dash.data.preferred_level !== 'novice') {
       setLevel(dash.data.preferred_level);
@@ -57,6 +60,9 @@ export default function Ask() {
 
   const [levelPickerOpen, setLevelPickerOpen] = useState(false);
   function pickLevel() {
+    // Always open the bottom sheet — the picker renders read-only when
+    // levelLocked is true, so a tap still opens a styled, on-brand
+    // explanation instead of the OS Material Alert.
     setLevelPickerOpen(true);
   }
   const [sessionId, setSessionId] = useState<string | undefined>(params.sessionId);
@@ -234,15 +240,18 @@ export default function Ask() {
             <View style={{ alignItems: 'center' }}>
               <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: C.line, marginBottom: 12 }} />
             </View>
-            <T v="handH2">Answer level</T>
+            <T v="handH2">{levelLocked ? 'Level locked' : 'Answer level'}</T>
             <T v="small" style={{ marginBottom: 6 }}>
-              How should Studae talk to you?
+              {levelLocked
+                ? 'This level was set when the lesson or chat was first started. To choose a different level, begin a fresh Ask from the document page.'
+                : 'How should Studae talk to you?'}
             </T>
             {LEVEL_OPTIONS.map((opt) => {
               const on = level === opt.value;
               return (
                 <Pressable
                   key={opt.value}
+                  disabled={levelLocked}
                   onPress={() => {
                     setLevel(opt.value);
                     setLevelPickerOpen(false);
@@ -257,6 +266,10 @@ export default function Ask() {
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 12,
+                    // Slightly fade the options the user can't choose
+                    // when locked, but keep the selected one fully
+                    // visible so the active level is obvious.
+                    opacity: levelLocked && !on ? 0.45 : 1,
                   }}
                 >
                   <View style={{ flex: 1, gap: 2 }}>
@@ -264,7 +277,11 @@ export default function Ask() {
                     <T v="small">{opt.sub}</T>
                   </View>
                   {on ? (
-                    <Ionicons name="checkmark-circle" size={22} color={C.accent} />
+                    <Ionicons
+                      name={levelLocked ? 'lock-closed' : 'checkmark-circle'}
+                      size={22}
+                      color={C.accent}
+                    />
                   ) : (
                     <View style={{
                       width: 22, height: 22, borderRadius: 11,
@@ -274,6 +291,20 @@ export default function Ask() {
                 </Pressable>
               );
             })}
+            {levelLocked ? (
+              <Pressable
+                onPress={() => setLevelPickerOpen(false)}
+                style={{
+                  marginTop: 8,
+                  paddingVertical: 12,
+                  alignItems: 'center',
+                  borderRadius: 14,
+                  backgroundColor: C.ink,
+                }}
+              >
+                <T style={{ color: C.card, fontWeight: '700' }}>Got it</T>
+              </Pressable>
+            ) : null}
           </Pressable>
         </Pressable>
       </Modal>

@@ -214,7 +214,13 @@ export default function Teach() {
             label="Ask"
             kind="soft"
             onPress={() =>
-              router.push({ pathname: '/learn/ask', params: { documentId, sessionId } })
+              router.push({
+                pathname: '/learn/ask',
+                // Pass the lesson's level so the Ask screen inherits it
+                // and locks the chip — mid-lesson Ask is tied to the
+                // lesson's level, not the student's free choice.
+                params: { documentId, sessionId, level: data?.level },
+              })
             }
             disabled={next.isPending}
           />

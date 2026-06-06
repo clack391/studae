@@ -101,18 +101,20 @@ export default function LessonHistory() {
                 if (isTeach) {
                   router.push({ pathname: '/transcript/[sid]', params: { sid: s.id, docId: s.document_id } });
                 } else {
-                  router.push({ pathname: '/learn/ask', params: { sessionId: s.id, documentId: s.document_id } });
+                  router.push({ pathname: '/learn/ask', params: { sessionId: s.id, documentId: s.document_id, level: s.level } });
                 }
               }}
             >
               <Card kind="soft">
                 <Row top>
-                  <Badge label={isTeach ? 'Teach' : 'Ask'} kind={isTeach ? 'exam' : 'out'} />
                   <Col gap={4} style={{ flex: 1 }}>
+                    <Row gap={6}>
+                      <Badge label={isTeach ? 'Teach' : 'Ask'} kind={isTeach ? 'exam' : 'out'} />
+                      <Badge label={cap(s.level)} kind="plain" />
+                    </Row>
                     <T v="bodyB" numberOfLines={1}>{s.title ?? (isTeach ? 'Lesson' : 'Conversation')}</T>
                     <T v="mut">
-                      {cap(s.level)}
-                      {resumable ? ` · topic ${s.current_outline_point} · in progress` : ` · ${shortDate(s.created_at)}`}
+                      {resumable ? `topic ${s.current_outline_point} · in progress` : shortDate(s.created_at)}
                     </T>
                   </Col>
                   {resumable ? (

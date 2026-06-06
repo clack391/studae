@@ -896,6 +896,17 @@ def _is_trivial_message(text: str) -> bool:
 def answer_question(user_id, session_id, document_id, question, level):
     require_session(session_id, user_id)
 
+    # Persist the level the student picked for this turn back onto the
+    # session row, so the lesson-history list shows the most recent
+    # level rather than only the one at session creation. Cheap update;
+    # ignore errors so a transient hiccup never blocks the answer.
+    if level:
+        try:
+            supabase.table("chat_sessions").update({"level": level}) \
+                .eq("id", session_id).eq("user_id", user_id).execute()
+        except Exception:
+            log.exception("failed to update chat_session level for %s", session_id)
+
     # Pull the message history once; we need it both for the embedding
     # query (to resolve pronouns) and for the LLM call further down.
     history = supabase.table("messages").select("role, content") \
@@ -1260,7 +1271,8 @@ def teach_next(user_id, session_id):
             return {"done": False, "topic": topic,
                     "lesson": cached[0]["content"],
                     "progress": f"{idx + 1} of {len(points)}",
-                    "sources": sources}
+                    "sources": sources,
+                    "level": session["level"]}
 
     # Fresh generation about to call Claude — now's the time to charge
     # against the plan cap. Cached returns above this point don't count.
@@ -1316,7 +1328,8 @@ def teach_next(user_id, session_id):
 
     return {"done": False, "topic": topic, "lesson": lesson,
             "progress": f"{idx + 1} of {len(points)}",
-            "sources": sources}
+            "sources": sources,
+            "level": session["level"]}
 
 
 def lesson_reset(user_id, session_id):

@@ -148,7 +148,7 @@ export default function PhotoProblem() {
               label="Continue in chat"
               kind="soft"
               block
-              onPress={() => router.replace({ pathname: '/learn/ask', params: { documentId, sessionId } })}
+              onPress={() => router.replace({ pathname: '/learn/ask', params: { documentId, sessionId, level } })}
             />
           </Card>
         ) : null}

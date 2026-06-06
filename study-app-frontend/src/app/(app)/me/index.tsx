@@ -8,6 +8,7 @@ import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row, Divider } from '@/components/ui/Card';
 import { Bar } from '@/components/ui/Bar';
 import { Badge } from '@/components/ui/Badge';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
@@ -158,29 +159,14 @@ export default function Me() {
     onError: (e: any) => Alert.alert('Could not clear', e?.message ?? ''),
   });
 
+  // Two-step destructive confirmations, both rendered via the custom
+  // ConfirmSheet so they stay on-brand instead of falling back to the
+  // OS Material Alert dialog.
+  const [signOutOpen, setSignOutOpen] = useState(false);
+  const [clearStep1Open, setClearStep1Open] = useState(false);
+  const [clearStep2Open, setClearStep2Open] = useState(false);
   function confirmClearData() {
-    Alert.alert(
-      'Clear ALL your data?',
-      'This removes every document you uploaded, every lesson you took, every test you generated, every flashcard, every focus area, and every file in storage. Your account and email stay. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear everything',
-          style: 'destructive',
-          onPress: () => {
-            // Second confirmation — destructive enough to deserve two taps.
-            Alert.alert(
-              'Are you absolutely sure?',
-              'There is no undo. Type-confirm by tapping Clear again.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Clear', style: 'destructive', onPress: () => clearData.mutate() },
-              ],
-            );
-          },
-        },
-      ],
-    );
+    setClearStep1Open(true);
   }
 
   const name = dash.data?.name ?? (session?.user?.user_metadata as any)?.full_name ?? 'You';
@@ -275,22 +261,7 @@ export default function Me() {
           </Card>
         </Pressable>
 
-        <Pressable
-          onPress={() =>
-            Alert.alert(
-              'Sign out?',
-              'You will need to sign back in to use the app.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Sign out',
-                  style: 'destructive',
-                  onPress: () => supabase.auth.signOut(),
-                },
-              ],
-            )
-          }
-        >
+        <Pressable onPress={() => setSignOutOpen(true)}>
           <Card kind="soft" flat>
             <Row>
               <Ionicons name="log-out-outline" size={18} color={C.ink2} />
@@ -343,6 +314,36 @@ export default function Me() {
           </Card>
         </Pressable>
       </Screen>
+
+      <ConfirmSheet
+        visible={signOutOpen}
+        tone="neutral"
+        title="Sign out?"
+        message="You will need to sign back in to use the app."
+        confirmLabel="Sign out"
+        onConfirm={() => supabase.auth.signOut()}
+        onCancel={() => setSignOutOpen(false)}
+      />
+
+      <ConfirmSheet
+        visible={clearStep1Open}
+        tone="danger"
+        title="Clear ALL your data?"
+        message="This removes every document you uploaded, every lesson you took, every test you generated, every flashcard, every focus area, and every file in storage. Your account and email stay. This cannot be undone."
+        confirmLabel="Clear everything"
+        onConfirm={() => setClearStep2Open(true)}
+        onCancel={() => setClearStep1Open(false)}
+      />
+
+      <ConfirmSheet
+        visible={clearStep2Open}
+        tone="danger"
+        title="Are you absolutely sure?"
+        message="There is no undo. Tap Clear once more to wipe everything."
+        confirmLabel="Clear"
+        onConfirm={() => clearData.mutate()}
+        onCancel={() => setClearStep2Open(false)}
+      />
     </View>
   );
 }
