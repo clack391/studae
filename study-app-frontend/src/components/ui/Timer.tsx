@@ -9,6 +9,15 @@ export function Timer({ secondsLeft, onZero }: { secondsLeft: number; onZero?: (
   const C = useTheme();
   const [left, setLeft] = useState(secondsLeft);
   const firedRef = useRef(false);
+  // Latest onZero behind a ref. The parent passes an inline arrow
+  // (`() => submit.mutate()`) so its identity changes every render. If
+  // we depended on it directly, the countdown effect below would tear
+  // down and recreate setInterval every parent re-render, which on the
+  // take screen flickered the timer/question area on first mount as
+  // state settled. Going through a ref means onZero updates are picked
+  // up without invalidating the effect.
+  const onZeroRef = useRef(onZero);
+  useEffect(() => { onZeroRef.current = onZero; }, [onZero]);
 
   // Sync when the server reports a fresh value.
   useEffect(() => {
@@ -16,17 +25,25 @@ export function Timer({ secondsLeft, onZero }: { secondsLeft: number; onZero?: (
     firedRef.current = false;
   }, [secondsLeft]);
 
+  // Single countdown. Set once, ticks every second; no dependency on
+  // `left` (we use the functional setLeft form) and no dependency on
+  // `onZero` (read through the ref). The interval lives for the whole
+  // mount and is cleared on unmount.
   useEffect(() => {
-    if (left <= 0) {
-      if (!firedRef.current) {
-        firedRef.current = true;
-        onZero?.();
-      }
-      return;
-    }
-    const id = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000);
+    const id = setInterval(() => {
+      setLeft((s) => {
+        if (s <= 0) return 0;
+        const next = s - 1;
+        if (next <= 0 && !firedRef.current) {
+          firedRef.current = true;
+          // Defer to a microtask so we don't call setState mid-render.
+          Promise.resolve().then(() => onZeroRef.current?.());
+        }
+        return Math.max(0, next);
+      });
+    }, 1000);
     return () => clearInterval(id);
-  }, [left, onZero]);
+  }, []);
 
   const low = left < 60;
   return (
