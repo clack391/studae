@@ -9,7 +9,8 @@ import { Ring } from '@/components/ui/Ring';
 import { Bar } from '@/components/ui/Bar';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
-import { Loading } from '@/components/ui/Loading';
+import { AIThinking } from '@/components/ui/Pulse';
+import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
@@ -28,7 +29,18 @@ export default function Result() {
     return (
       <View style={{ flex: 1, backgroundColor: C.paper }}>
         <AppBar back title="Results" />
-        <Screen><Loading label="Grading…" /></Screen>
+        <Screen>
+          <IndeterminateBar />
+          <AIThinking
+            title="Marking your test"
+            tips={[
+              'Objective questions are checked against the saved correct option.',
+              'Theory answers are graded against the rubric, scored by meaning rather than exact wording.',
+              'Photo answers run OCR first, then are graded on the work shown.',
+              'Your overall score and per-question breakdown appear when grading finishes.',
+            ]}
+          />
+        </Screen>
       </View>
     );
   }

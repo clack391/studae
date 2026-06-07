@@ -139,6 +139,16 @@ export default function Me() {
     }
   }, [dash.data?.preferred_level, dash.data?.tts_enabled]);
 
+  // Two-step destructive confirmations, both rendered via the custom
+  // ConfirmSheet so they stay on-brand instead of falling back to the
+  // OS Material Alert dialog. Declared before the mutations so the
+  // mutation callbacks can safely capture the setters in their closures.
+  const [signOutOpen, setSignOutOpen] = useState(false);
+  const [clearStep1Open, setClearStep1Open] = useState(false);
+  const [clearStep2Open, setClearStep2Open] = useState(false);
+  const [clearDoneOpen, setClearDoneOpen] = useState(false);
+  const [clearErrorOpen, setClearErrorOpen] = useState<string | null>(null);
+
   const save = useMutation({
     mutationFn: (body: { preferred_level?: Level; tts_enabled?: boolean }) => api.updateSettings(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['dashboard'] }),
@@ -151,21 +161,12 @@ export default function Me() {
       // Drop every cached query so Home/Library/Cards/Exams re-fetch empty
       // state instead of showing stale rows.
       qc.clear();
-      Alert.alert(
-        'All data cleared',
-        'Your documents, lessons, flashcards, tests, and uploads are gone. Your account stays active.',
-        [{ text: 'OK', onPress: () => router.replace('/(app)/home') }],
-      );
+      setClearDoneOpen(true);
     },
-    onError: (e: any) => Alert.alert('Could not clear', e?.message ?? ''),
+    onError: (e: any) =>
+      setClearErrorOpen(e?.message?.trim() || 'Something went wrong on our end. Please try again in a moment.'),
   });
 
-  // Two-step destructive confirmations, both rendered via the custom
-  // ConfirmSheet so they stay on-brand instead of falling back to the
-  // OS Material Alert dialog.
-  const [signOutOpen, setSignOutOpen] = useState(false);
-  const [clearStep1Open, setClearStep1Open] = useState(false);
-  const [clearStep2Open, setClearStep2Open] = useState(false);
   function confirmClearData() {
     setClearStep1Open(true);
   }
@@ -344,6 +345,28 @@ export default function Me() {
         confirmLabel="Clear"
         onConfirm={() => clearData.mutate()}
         onCancel={() => setClearStep2Open(false)}
+      />
+
+      <ConfirmSheet
+        visible={clearDoneOpen}
+        tone="neutral"
+        singleAction
+        title="All data cleared"
+        message="Your documents, lessons, flashcards, tests, and uploads are gone. Your account stays active."
+        confirmLabel="OK"
+        onConfirm={() => router.replace('/(app)/home')}
+        onCancel={() => setClearDoneOpen(false)}
+      />
+
+      <ConfirmSheet
+        visible={clearErrorOpen !== null}
+        tone="neutral"
+        singleAction
+        title="We could not clear your data"
+        message={clearErrorOpen ?? ''}
+        confirmLabel="OK"
+        onConfirm={() => setClearErrorOpen(null)}
+        onCancel={() => setClearErrorOpen(null)}
       />
     </View>
   );
