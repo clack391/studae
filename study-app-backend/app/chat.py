@@ -5,7 +5,7 @@ import re
 from fastapi import HTTPException
 
 from .billing import LimitError, check_and_count
-from .clients import claude, STYLE_RULES, supabase
+from .clients import claude, STYLE_RULES, supabase, track_claude
 from .ingest import embed, read_image
 from .permissions import require_session
 
@@ -312,7 +312,8 @@ def _ai_filter_sources(topic: str, lesson_excerpt: str, sources: list) -> list:
         "Empty array is fine — drop everything if nothing genuinely fits."
     )
     try:
-        raw = claude.messages.create(
+        raw = track_claude(
+            "ai_filter_sources",
             model="claude-haiku-4-5",
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
@@ -424,7 +425,8 @@ def _tag_question_with_topic(question: str, outline_text: str,
         "outline entry verbatim, or an empty string)."
     )
     try:
-        raw = claude.messages.create(
+        raw = track_claude(
+            "tag_question_topic",
             model="claude-haiku-4-5",
             max_tokens=120,
             messages=[{"role": "user", "content": prompt}],
@@ -479,7 +481,8 @@ def _extract_questions_from_photo(image_b64: str, media_type: str,
         "{\"questions\":[{\"question\":\"...\", \"topic\":\"...\"}, ...]}"
     )
     try:
-        raw = claude.messages.create(
+        raw = track_claude(
+            "extract_questions_from_photo",
             model="claude-haiku-4-5",
             max_tokens=1500,
             messages=[{
@@ -734,7 +737,8 @@ def answer_photo_question(user_id, session_id, document_id,
     # reply.
     max_tokens = min(3000, 800 + 600 * len(extracted))
 
-    reply = claude.messages.create(
+    reply = track_claude(
+        "answer_photo_question",
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
         system=system,
@@ -1078,7 +1082,8 @@ def answer_question(user_id, session_id, document_id, question, level):
         "content": f"Material:\n{context}\n\nQuestion: {question}",
     })
 
-    reply = claude.messages.create(
+    reply = track_claude(
+        "answer_question",
         model="claude-sonnet-4-6",
         max_tokens=1500,
         system=system,
@@ -1168,7 +1173,8 @@ def summarize_topic(user_id, document_id, topic, level):
         level_hint=LEVELS.get(level, LEVELS["novice"]),
         context=context,
     ) + STYLE_RULES
-    summary = claude.messages.create(
+    summary = track_claude(
+        "summarize_topic",
         model="claude-sonnet-4-6",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
@@ -1186,7 +1192,8 @@ def summarize_outline(document_id, level):
         outline=outline,
         level_hint=LEVELS.get(level, LEVELS["novice"]),
     ) + STYLE_RULES
-    summary = claude.messages.create(
+    summary = track_claude(
+        "summarize_outline",
         model="claude-sonnet-4-6",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
@@ -1298,7 +1305,8 @@ def teach_next(user_id, session_id):
         f"Material for this topic:\n{context}"
     )
 
-    lesson = claude.messages.create(
+    lesson = track_claude(
+        "generate_lesson",
         model="claude-sonnet-4-6",
         max_tokens=1500,
         system=system,

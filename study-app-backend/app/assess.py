@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
-from .clients import claude, STYLE_RULES, supabase
+from .clients import claude, STYLE_RULES, supabase, track_claude
 from .permissions import require_assessment, require_document
 
 log = logging.getLogger(__name__)
@@ -483,7 +483,8 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
     # question plus a 1500-token preamble buffer, capped at 32k for
     # safety (Sonnet 4.6 supports much more output).
     max_tokens = min(32000, 1500 + 600 * num)
-    raw = claude.messages.create(
+    raw = track_claude(
+        "generate_questions",
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
@@ -677,7 +678,8 @@ def _haiku_vision_figure_matches(q: dict, figure_chunks: list) -> bool:
             "{\"match\": true, \"leaks_answer\": false}."
         )
         try:
-            raw = claude.messages.create(
+            raw = track_claude(
+                "vision_verify_figure",
                 model="claude-haiku-4-5",
                 max_tokens=120,
                 messages=[{
@@ -748,7 +750,8 @@ def _regenerate_text_only_question(original, source, fmt, level, kind, topic):
         + STYLE_RULES
     )
     try:
-        raw = claude.messages.create(
+        raw = track_claude(
+            "regenerate_text_only_question",
             model="claude-sonnet-4-6",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
@@ -1010,7 +1013,8 @@ def _verify_test_figures(questions_with_figures):
         "remain. Empty list is fine."
     )
     try:
-        raw = claude.messages.create(
+        raw = track_claude(
+            "test_figure_batch_verify",
             model="claude-haiku-4-5",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
@@ -1241,7 +1245,8 @@ def grade_theory(q, student_answer, extracted_work=None):
         '"<short why, referring to the rubric points>"}'
         + STYLE_RULES
     )
-    raw = claude.messages.create(
+    raw = track_claude(
+        "grade_answer",
         model="claude-sonnet-4-6",
         max_tokens=800,
         temperature=0,

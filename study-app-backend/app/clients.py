@@ -1,4 +1,9 @@
+import json
+import logging
 import os
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
@@ -47,3 +52,114 @@ STYLE_RULES = (
     "This rule applies to every sentence you write, including text inside "
     "JSON fields you return."
 )
+
+
+# LLM usage tracking. Every claude / gemini call goes through `track_claude`
+# or `track_gemini` so token usage and cost get logged to two places:
+#   1. the existing app logger (terminal output during dev)
+#   2. data/usage.jsonl (persistent JSONL history — sum with
+#      `python -m scripts.usage_total`)
+# Failure to write the file is swallowed; nothing in this path can break a
+# request.
+_log = logging.getLogger("usage")
+
+# Public Anthropic / Google pricing in dollars per 1M tokens. Update if
+# pricing changes. Unknown models log token counts but $0 cost.
+_PRICING = {
+    # Anthropic Claude
+    "claude-sonnet-4-6":       {"in": 3.00,  "out": 15.00},
+    "claude-haiku-4-5":        {"in": 1.00,  "out":  5.00},
+    "claude-opus-4-7":         {"in": 15.00, "out": 75.00},
+    "claude-opus-4-8":         {"in": 15.00, "out": 75.00},
+    # Google Gemini
+    "gemini-2.5-flash-lite":   {"in": 0.10,  "out":  0.40},
+    "gemini-2.5-flash":        {"in": 0.30,  "out":  2.50},
+    "gemini-embedding-001":    {"in": 0.15,  "out":  0.00},
+}
+
+_USAGE_FILE = Path(__file__).resolve().parent.parent / "data" / "usage.jsonl"
+_USAGE_LOCK = threading.Lock()
+
+
+def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    p = _PRICING.get(model)
+    if not p:
+        return 0.0
+    return (input_tokens * p["in"] + output_tokens * p["out"]) / 1_000_000
+
+
+def _record_usage(step: str, model: str, input_tokens: int, output_tokens: int):
+    cost = _cost_usd(model, input_tokens, output_tokens)
+    _log.info(
+        "usage step=%s model=%s in=%d out=%d cost=$%.6f",
+        step, model, input_tokens, output_tokens, cost,
+    )
+    line = json.dumps({
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "step": step,
+        "model": model,
+        "input": input_tokens,
+        "output": output_tokens,
+        "cost_usd": round(cost, 6),
+    }, ensure_ascii=False)
+    try:
+        with _USAGE_LOCK:
+            _USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with _USAGE_FILE.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except Exception as e:
+        _log.warning("usage log write failed: %s: %s", type(e).__name__, e)
+
+
+def track_claude(step: str, **kwargs):
+    """Wrap claude.messages.create() with usage tracking. Same signature
+    and return value as the underlying call; the response is unchanged."""
+    resp = claude.messages.create(**kwargs)
+    try:
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            _record_usage(
+                step,
+                kwargs.get("model", "unknown"),
+                int(getattr(usage, "input_tokens", 0) or 0),
+                int(getattr(usage, "output_tokens", 0) or 0),
+            )
+    except Exception as e:
+        _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
+    return resp
+
+
+def track_gemini(step: str, **kwargs):
+    """Wrap gemini.models.generate_content() with usage tracking. Same
+    signature and return value as the underlying call."""
+    resp = gemini.models.generate_content(**kwargs)
+    try:
+        usage = getattr(resp, "usage_metadata", None)
+        if usage is not None:
+            _record_usage(
+                step,
+                kwargs.get("model", "unknown"),
+                int(getattr(usage, "prompt_token_count", 0) or 0),
+                int(getattr(usage, "candidates_token_count", 0) or 0),
+            )
+    except Exception as e:
+        _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
+    return resp
+
+
+def track_gemini_embed(step: str, **kwargs):
+    """Wrap gemini.models.embed_content() — embeddings have no output
+    tokens, but input tokens still matter for cost tracking."""
+    resp = gemini.models.embed_content(**kwargs)
+    try:
+        usage = getattr(resp, "usage_metadata", None)
+        if usage is not None:
+            _record_usage(
+                step,
+                kwargs.get("model", "unknown"),
+                int(getattr(usage, "prompt_token_count", 0) or 0),
+                0,
+            )
+    except Exception as e:
+        _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
+    return resp

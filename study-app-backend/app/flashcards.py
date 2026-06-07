@@ -13,7 +13,7 @@ from .assess import (
     document_text_sample,
     extract_json,
 )
-from .clients import claude, STYLE_RULES, supabase
+from .clients import claude, STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
 
@@ -44,7 +44,8 @@ def generate_cards(user_id, document_id, num, level, focus_area_id=None):
     else:
         source, chunk_ids = document_text_sample(document_id)
     prompt = GENERATE_PROMPT.format(num=num, level=level, source=source) + STYLE_RULES
-    raw = claude.messages.create(
+    raw = track_claude(
+        "generate_flashcards",
         model="claude-sonnet-4-6",
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],

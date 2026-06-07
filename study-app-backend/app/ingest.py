@@ -5,7 +5,7 @@ import re
 import fitz  # pymupdf
 from google.genai import types
 
-from .clients import claude, gemini, STYLE_RULES, supabase
+from .clients import claude, gemini, STYLE_RULES, supabase, track_claude, track_gemini, track_gemini_embed
 from .retry import QuotaExhausted, transient
 
 log = logging.getLogger(__name__)
@@ -68,7 +68,8 @@ def _detect_page_diagrams(page) -> list[bytes]:
     """
     page_png = page.get_pixmap(dpi=150).tobytes("png")
     try:
-        resp = gemini.models.generate_content(
+        resp = track_gemini(
+            "detect_page_diagrams",
             model=MODEL_FAST,
             contents=[
                 types.Part.from_bytes(data=page_png, mime_type="image/png"),
@@ -138,7 +139,8 @@ def _detect_page_diagrams(page) -> list[bytes]:
 
 @transient()
 def read_image(img_bytes: bytes, model: str = MODEL_FAST) -> str:
-    resp = gemini.models.generate_content(
+    resp = track_gemini(
+        "ocr_page",
         model=model,
         contents=[
             types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
@@ -305,7 +307,8 @@ def classify_content_type(text: str) -> str:
 
 @transient()
 def embed(text: str) -> list[float]:
-    res = gemini.models.embed_content(
+    res = track_gemini_embed(
+        "embed_chunk",
         model="gemini-embedding-001",
         contents=text,
         config={"output_dimensionality": 1536},
@@ -314,7 +317,8 @@ def embed(text: str) -> list[float]:
 
 
 def build_outline(text: str) -> str:
-    msg = claude.messages.create(
+    msg = track_claude(
+        "build_outline",
         model="claude-sonnet-4-6",
         max_tokens=2000,
         messages=[{"role": "user", "content": OUTLINE_PROMPT + text[:50000] + STYLE_RULES}],

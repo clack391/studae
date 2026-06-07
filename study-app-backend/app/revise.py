@@ -4,7 +4,7 @@ from .assess import (
     extract_json,
     time_from_questions,
 )
-from .clients import claude, STYLE_RULES, supabase
+from .clients import claude, STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
 
@@ -56,7 +56,8 @@ def create_practice(user_id, document_id, level, num=None, time_limit=None):
         f"Material:\n{source}"
         + STYLE_RULES
     )
-    raw = claude.messages.create(
+    raw = track_claude(
+        "revise_weak_areas",
         model="claude-sonnet-4-6", max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
