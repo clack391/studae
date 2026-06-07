@@ -43,6 +43,8 @@ The required keys are `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY
 
 `SUPABASE_JWT_SECRET` is **strongly recommended**. When set, `auth.py` verifies the user's access token locally on every request (microseconds, no network) instead of calling `supabase.auth.get_user`, which is a network round-trip to the Supabase Auth API (~100–300ms per request). Grab the value from Supabase dashboard → Project Settings → API → JWT Settings → JWT Secret (the long base64-ish string, **not** the anon or service-role keys). Without it, the backend still works but every endpoint is noticeably slower because each request pays the network-auth tax.
 
+Newer Supabase projects sign JWTs with **ES256/RS256** (asymmetric) instead of HS256. `auth.py` detects the token's `alg` header and uses the right path: HS256 falls back to `SUPABASE_JWT_SECRET`, ES256/RS256 fetches the project's public keys from `<SUPABASE_URL>/auth/v1/.well-known/jwks.json` via `PyJWKClient` and verifies locally. The JWKS keys are cached in-process and refreshed automatically when Supabase rotates them (keys are looked up by `kid`). First request after a backend restart pays one ~200-500ms JWKS fetch; every subsequent request is local. `SUPABASE_URL` is required for the JWKS path to work.
+
 ### 3. Install
 
 Install `uv` if you don't have it:

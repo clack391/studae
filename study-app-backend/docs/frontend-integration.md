@@ -288,7 +288,9 @@ Only show the speaker button when the user's profile has `tts_enabled: true` (yo
 
 ## 7. Sources — rendering them
 
-Every AI response has `sources: [{chunk_id, page_number, snippet}]`. Standard rendering: a thin row of tappable cards below the answer.
+Every AI response has `sources: [{chunk_id, page_number, snippet, figure_path}]`. `figure_path` is set when the chunk had an embedded diagram extracted from the PDF page (a leaf disease photo, an anatomical figure, etc); render it inline as an image. When the doc is a single-page PDF (HTML-to-PDF export), the backend sends `figure_path: null` on every source because positional figure-to-chunk assignment isn't trustworthy there — render text-only sources for those docs.
+
+Standard rendering: a thin row of tappable cards below the answer.
 
 ```tsx
 function Sources({ sources }: { sources?: Source[] }) {
@@ -315,6 +317,45 @@ function Sources({ sources }: { sources?: Source[] }) {
 ```
 
 Show this under every answer, lesson, summary, flashcard, and graded question.
+
+### 7a. Rendering figures (`figure_path`) via signed URLs
+
+`figure_path` is a private Supabase Storage path like `<user_id>/<doc_id>/figures/p7_0.png`. The bucket is private, so the path isn't directly fetchable — call `GET /files/signed-url?path=<encoded_path>` to mint a 1-hour signed URL, then pass that URL to `<Image>`. The endpoint validates the path starts with the caller's user_id, so even a guessed path for another user's file returns 403.
+
+```tsx
+function Figure({ path, caption }: { path: string; caption?: string }) {
+  const [uri, setUri] = useState<string | null>(null);
+  useEffect(() => {
+    apiGet<{ url: string }>(`/files/signed-url?path=${encodeURIComponent(path)}`)
+      .then(({ url }) => setUri(url));
+  }, [path]);
+  if (!uri) return null;
+  return (
+    <View style={{ marginVertical: 8 }}>
+      <Image source={{ uri }} style={{ width: '100%', aspectRatio: 1.6 }} resizeMode="cover" />
+      {caption ? <Text style={{ fontSize: 12, marginTop: 4 }}>{caption}</Text> : null}
+    </View>
+  );
+}
+```
+
+Reuse the same component for: lessons (figures next to topic text), `/ask` and `/ask-photo` (figures next to answers), test-taking screen (`figure_sources` on each question), test-review screen (`sources[].figure_path`).
+
+### 7b. Persisting sources across screen reloads
+
+Teach lessons and /ask replies have their `sources` arrays persisted on the assistant message in `messages.metadata.sources` (jsonb). `GET /sessions/{id}/messages` returns the `metadata` field on each message, so a transcript view or a resumed /ask chat can render the same figures + page citations without re-running RAG.
+
+```tsx
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string | null;
+  metadata?: { sources?: Source[]; topic?: string } | null;
+  created_at: string;
+};
+```
+
+For assistant turns, hydrate `sources` from `m.metadata?.sources` when re-rendering. Older messages (pre-column) have `metadata = null` — fall back to just the text bubble.
 
 ## 8. Test, exam, and grading UI patterns
 

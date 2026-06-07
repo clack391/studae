@@ -36,12 +36,14 @@ Every AI response — `/ask`, `/ask-photo`, `/lesson/next`, `/assessment/submit`
 
 ```json
 "sources": [
-  {"chunk_id": "uuid", "page_number": 14, "snippet": "first 200 chars of the chunk text..."},
-  ...
+  {"chunk_id": "uuid", "page_number": 14, "snippet": "first 200 chars of the chunk text...", "figure_path": null},
+  {"chunk_id": "uuid", "page_number": 7,  "snippet": "",                                       "figure_path": "<user_id>/<doc_id>/figures/p7_0.png"}
 ]
 ```
 
-Render these under every AI response as "from your material, page N" tappable cards. They are the trust layer — students can see exactly what fed the answer.
+Render these under every AI response as "from your material, page N" tappable cards. They are the trust layer — students can see exactly what fed the answer. When a source has a `figure_path` (extracted image from a PDF page), resolve a 1-hour signed URL via `GET /files/signed-url?path=...` and render it as a diagram next to the chunk text. Sources are persisted into `messages.metadata.sources` for teach lessons and /ask replies, so the lesson-history transcript can replay figures + citations without re-running RAG.
+
+Single-page PDFs (HTML-to-PDF exports where every chunk shares `page_number = 1`) have all `figure_path` values nulled out on the server before the response goes back — positional figure-to-chunk assignment isn't reliable on those documents, so we'd rather show no figure than a wrong one.
 
 ## 1. Upload + ingest
 
@@ -122,7 +124,18 @@ curl -s -X POST "$BASE/ask-photo" "${AUTH[@]}" \
 echo
 ```
 
-Response includes `read_back` (what Gemini OCR'd from your image) **and** `answer` + `sources`. Show `read_back` to the student so they catch a misread before it ruins the answer. `/ask-photo` uses the stronger `gemini-2.5-flash` model (vs flash-lite for ingest) because handwriting and math need it.
+Response shape: `{ read_back: "", answer, sources }`. `read_back` is kept as an empty string for backward compatibility with old client code — `/ask-photo` no longer pre-OCRs the image. Claude vision sees the photo directly.
+
+Multi-question pipeline (2026-06-07): the backend runs a three-stage flow on every `/ask-photo` call:
+1. **Haiku vision pass** extracts every question off the photo and tags each with the matching outline topic.
+2. **Per-question RAG** fuses topic + question (`"<topic>: <question>"`) and retries on miss (topic-only, then bare-question).
+3. **Sonnet vision pass** receives the photo + a per-question material block + the full outline, and replies with a `**Question N:**` heading per answer.
+
+Intent comes from the typed prompt:
+- `"answer these"` / `"solve them"` → direct answers
+- `"explain"` / `"walk me through"` / `"step by step"` → step-by-step explanations
+- `"check my work"` / `"is this correct?"` → grades the student's visible written work
+- empty or vague (`"hi"`, `"look at this"`) → Sonnet is **skipped** entirely; the response lists the extracted questions back and asks what the student wants. Saves the Sonnet call until intent is clear.
 
 ## 3. Teach mode
 
@@ -146,11 +159,12 @@ Response shape:
   "topic": "What is IPM?",
   "lesson": "...markdown lesson body...",
   "progress": "1 of 33",
-  "sources": [{"chunk_id": "...", "page_number": 3, "snippet": "..."}]
+  "sources": [{"chunk_id": "...", "page_number": 3, "snippet": "...", "figure_path": null}],
+  "level": "novice"
 }
 ```
 
-`progress` is `"N of M"` for a progress bar. `done: true` once you've finished the outline. State (which topic, what's been covered) lives on the server, so a refresh or reconnect picks up exactly where it left off. The lesson body has its RECAP marker stripped server-side; `lesson_summary` on the session quietly accumulates a one-sentence recap of each topic, which is what stops repetition across turns.
+`progress` is `"N of M"` for a progress bar. `done: true` once you've finished the outline. State (which topic, what's been covered) lives on the server, so a refresh or reconnect picks up exactly where it left off. The lesson body has its RECAP marker stripped server-side; `lesson_summary` on the session quietly accumulates a one-sentence recap of each topic, which is what stops repetition across turns. `level` is returned so mid-lesson Ask can inherit and lock the lesson's level instead of falling back to the student's preferred level.
 
 ### Focus-scoped lessons
 

@@ -1,6 +1,6 @@
-# Studae — Expo frontend (walking skeleton)
+# Studae — Expo frontend
 
-Expo SDK 56 / React Native app built against the local FastAPI backend in `../study-app-backend/`. This first cut covers the end-to-end **learn loop** — sign in → upload a PDF → watch ingestion → open it → pick a level → get taught. The rest (assessments, flashcards, focus areas, history, plans) comes in follow-up turns.
+Expo SDK 56 / React Native app built against the FastAPI backend in `../study-app-backend/`. Covers the full study loop: sign in → upload a PDF → watch ingestion → pick a level → get taught → ask follow-ups (text or photo, single or multi-question worksheets) → generate tests and exams → review with photo math grading → review flashcards on a spaced-repetition schedule → track focus areas with exam dates. Plus account / data management, plans, themes, accessibility (larger text), and a premium custom UI for every confirmation (no system Material alerts anywhere).
 
 ## Setup
 
@@ -122,17 +122,6 @@ scripts/
 - Body / inputs / chat use the system font for readability.
 
 Theme tokens are in `src/lib/theme.ts` and mirror the wireframe's `wf/styles.css`.
-
-## What's NOT in yet (next turn)
-
-- Assessments: create / take / photo answer / submit / review / exam-lock / dispute
-- Ask mode (chat composer) + photo problem
-- Flashcards tab + SM-2 review runner
-- Exams tab: history list + focus areas + revise misses
-- Plans, upgrade gate, account deletion
-- Lesson history / transcript reader
-
-The endpoint coverage for every one of those already exists in `src/lib/api.ts` — only the screens are missing.
 
 ## Typecheck
 

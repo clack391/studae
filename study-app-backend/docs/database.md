@@ -140,7 +140,7 @@ The embedded passages of every document. One row per ~800-word chunk.
 ### Defaults
 
 - `content_type` = `'text'`. Other values: `'math'` (chunks containing LaTeX markers) and `'figure'` (chunks that are a `[bracketed description]` of a diagram).
-- `figure_path` is always `null` today — figures are stored as inline text descriptions rather than separate image files. Deferred per [backend-status.md](backend-status.md).
+- `figure_path` points at `<user_id>/<doc_id>/figures/p<N>_<idx>.png` in the `uploads` bucket when the source page has an embedded image extracted by PyMuPDF; null otherwise. Populated by `ingest_document` since 2026-06-05. Frontend resolves a 1-hour signed URL via `GET /files/signed-url?path=...` to render the diagram next to the chunk text. The `_sources_from_search` figure-expansion path (chat.py) pulls every same-page figure for composite-figure handling (e.g. Anthracnose subfigures A/B/C/D). Single-page PDFs (HTML-to-PDF exports) suppress `figure_path` everywhere at read time because positional figure-to-chunk assignment is unreliable on those documents.
 
 ### Indexes
 
