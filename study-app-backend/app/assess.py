@@ -344,11 +344,17 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
         "image below?\", \"From the graph, determine…\", \"Examine "
         "the circuit and find…\"). When needs_figure=false, the "
         "question text must NOT mention any figure / image / diagram "
-        "/ graph / chart / photo.\n\n"
+        "/ graph / chart / photo.\n"
+        "- For EVERY objective question, also include an \"explanation\" "
+        "field: 1-3 plain-text sentences that tell the student WHY the "
+        "correct option is correct (drawing on the material the question "
+        "is based on). Keep it concise — enough to teach, not a wall of "
+        "text. This is shown on the post-test review screen alongside "
+        "the option text.\n\n"
         "Return ONLY valid JSON, no other text, in this shape:\n"
         '{"questions":['
         '{"type":"objective","question":"...","options":["...","...","...","..."],'
-        '"correct_option":"A","points":1,"source_chunks":[0],"needs_figure":false},'
+        '"correct_option":"A","explanation":"Brief 1-3 sentence reason this option is correct.","points":1,"source_chunks":[0],"needs_figure":false},'
         '{"type":"theory","question":"...","reference_answer":"...",'
         '"rubric":[{"point":"...","marks":2}],"points":5,"source_chunks":[1,2],"needs_figure":true}'
         "]}\n\n"
@@ -664,13 +670,21 @@ def create_assessment(user_id, document_id, kind, fmt, level, num, time_limit,
 
     rows = []
     for q in questions:
+        # Objective questions don't naturally have a rubric, so we use
+        # `rubric` (jsonb, nullable) to carry the model's per-question
+        # `explanation` for the post-test review screen. Avoids a schema
+        # migration and keeps the explanation tied to the question row
+        # for free. grade_objective reads it back out.
+        rubric_value = q.get("rubric")
+        if q.get("type") == "objective" and q.get("explanation"):
+            rubric_value = {"explanation": str(q["explanation"]).strip()}
         rows.append({
             "assessment_id": assessment_id,
             "question_text": q["question"],
             "question_type": q["type"],
             "options": q.get("options"),
             "reference_answer": q.get("correct_option") or q.get("reference_answer"),
-            "rubric": q.get("rubric"),
+            "rubric": rubric_value,
             "points": q.get("points", 1),
             "source_chunk_ids": _resolve_source_chunks(q.get("source_chunks"), chunk_ids),
         })
@@ -971,8 +985,36 @@ def grade_objective(q, student_answer):
     correct = (q["reference_answer"] or "").strip().lower()
     given = (student_answer or "").strip().lower()
     ok = bool(given) and given == correct
+
+    # Build a teach-friendly reasoning line. Old version returned just
+    # "Correct answer: B." which left the student staring at a letter
+    # with no idea what option B actually said. Now we resolve the letter
+    # to the option text and append the stored explanation (saved on the
+    # question's `rubric` field at generation time) when available.
+    letter = (q.get("reference_answer") or "").strip().upper()
+    options = q.get("options") or []
+    option_text = ""
+    if letter and "A" <= letter <= "D":
+        idx = ord(letter) - ord("A")
+        if 0 <= idx < len(options):
+            option_text = str(options[idx]).strip()
+
+    rubric = q.get("rubric")
+    explanation = ""
+    if isinstance(rubric, dict):
+        explanation = str(rubric.get("explanation") or "").strip()
+
+    if letter and option_text:
+        reasoning = f"Correct answer: {letter}. {option_text}"
+    elif letter:
+        reasoning = f"Correct answer: {letter}."
+    else:
+        reasoning = "Correct answer not available."
+    if explanation:
+        reasoning = f"{reasoning}\n\n{explanation}"
+
     points = q["points"] if ok else 0
-    return ok, points, f"Correct answer: {q['reference_answer']}."
+    return ok, points, reasoning
 
 
 def grade_theory(q, student_answer, extracted_work=None):
@@ -1061,15 +1103,22 @@ def grade_assessment(user_id, assessment_id):
             out["answers_release_at"] = release_at
         return out
 
-    by_q = {a["question_id"]: a for a in answers}
+    # `a` (assessment row from above) was being shadowed by the loop
+    # variable below, so after the loop `a` ended up as the last answer
+    # row (or None) instead of the assessment. The post-loop code that
+    # called hide_exam_answers_if_locked(a, ...) then crashed with
+    # `'NoneType' object does not support item assignment`. Use distinct
+    # names for the answer dict (`ans`) so the outer assessment stays
+    # untouched.
+    by_q = {ans["question_id"]: ans for ans in answers}
     total = sum(q["points"] for q in questions)
     awarded = 0
     results = []
 
     for q in questions:
-        a = by_q.get(q["id"])
-        student = a["student_answer"] if a else None
-        work = a.get("extracted_work") if a else None
+        ans = by_q.get(q["id"])
+        student = ans["student_answer"] if ans else None
+        work = ans.get("extracted_work") if ans else None
 
         if q["question_type"] == "objective":
             ok, score, reason = grade_objective(q, student)
@@ -1083,7 +1132,7 @@ def grade_assessment(user_id, assessment_id):
             "is_correct": ok, "score_awarded": score,
             "grade_reasoning": reason, "graded_at": now_iso(),
         }, on_conflict="assessment_id,question_id").execute()
-        answer_id = up.data[0]["id"] if up.data else (a or {}).get("id")
+        answer_id = up.data[0]["id"] if up.data else (ans or {}).get("id")
 
         results.append({
             "answer_id": answer_id,

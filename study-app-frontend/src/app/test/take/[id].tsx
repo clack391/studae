@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Field } from '@/components/ui/Field';
@@ -92,7 +93,29 @@ export default function Take() {
     <View style={{ flex: 1, backgroundColor: C.paper }}>
       <AppBar back title="Test" />
       <Row style={{ paddingHorizontal: 14, paddingBottom: 6, borderBottomWidth: 1.6, borderColor: C.line }} gap={10}>
-        <Timer secondsLeft={start.data?.seconds_left ?? 0} onZero={() => submit.mutate()} />
+        {/* Hide the running clock once the student has hit Submit. Without
+            this guard the Timer kept ticking visibly while the submit
+            request was in flight, which looked like the test was still
+            live. A pending submit is a definitive end-of-test, so swap
+            the chip for a quiet "Submitting…" pill. */}
+        {submit.isPending || submit.isSuccess ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 5,
+              backgroundColor: C.ink,
+              paddingVertical: 4,
+              paddingHorizontal: 11,
+              borderRadius: 20,
+            }}
+          >
+            <Ionicons name="checkmark-circle-outline" size={13} color={C.card} />
+            <T style={{ color: C.card, fontSize: 13, fontWeight: '700' }}>Submitting…</T>
+          </View>
+        ) : (
+          <Timer secondsLeft={start.data?.seconds_left ?? 0} onZero={() => submit.mutate()} />
+        )}
         <View style={{ flex: 1 }} />
         <T v="bodyB">Question {idx + 1} of {total}</T>
       </Row>

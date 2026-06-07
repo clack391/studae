@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
+import { AIThinking } from '@/components/ui/Pulse';
+import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { Sources } from '@/components/ui/Sources';
 import { Figure } from '@/components/ui/Figure';
 import { MD } from '@/components/ui/MD';
@@ -72,7 +73,15 @@ export default function ReviewAnswers() {
                   <T style={{ flex: 1 }}>{r.your_answer}</T>
                 </Row>
               ) : <T v="mut">(left blank)</T>}
-              {r.reference_answer && status !== 'correct' ? (
+              {/* Reference line is only useful for theory questions where
+                  the reference answer is full prose. For objective MCQs
+                  the reference is just a letter (A-D), and the reasoning
+                  below already says "Correct answer: B. <option text>" —
+                  showing a bare "Reference: B" beside it is duplicate
+                  noise. Detect objective by the single-letter reference. */}
+              {r.reference_answer
+                && status !== 'correct'
+                && !/^[A-Da-d]$/.test(r.reference_answer.trim()) ? (
                 <Row top gap={6}>
                   <T v="mut">Reference:</T>
                   <T style={{ flex: 1 }}>{r.reference_answer}</T>
@@ -101,7 +110,28 @@ export default function ReviewAnswers() {
             </Card>
           );
         })}
-        {!results.length ? <T v="small" style={{ textAlign: 'center', marginTop: 24 }}>No graded answers yet.</T> : null}
+        {/* Loading state while grading runs server-side. The grader pass
+            on a 30-question test can take a few seconds; without a
+            visible loader the empty "No graded answers yet." copy made
+            it look like submit had silently produced nothing. Only fall
+            back to the empty copy when the query has finished and
+            genuinely returned no results. */}
+        {!results.length && (q.isPending || q.isFetching) ? (
+          <>
+            <IndeterminateBar />
+            <AIThinking
+              title="Marking your answers"
+              tips={[
+                'Objective questions are checked against the saved correct option.',
+                'Theory answers are graded against the rubric, scored by meaning rather than exact wording.',
+                'Photo answers run OCR first, then are graded on the work shown.',
+              ]}
+            />
+          </>
+        ) : null}
+        {!results.length && !q.isPending && !q.isFetching ? (
+          <T v="small" style={{ textAlign: 'center', marginTop: 24 }}>No graded answers yet.</T>
+        ) : null}
       </Screen>
     </View>
   );
