@@ -142,19 +142,27 @@ export default function Ask() {
   // Lazy session creation. We only create a chat_sessions row on the
   // first send. If the user opens this screen and leaves without asking,
   // nothing lands in the DB and the history page stays clean.
+  //
+  // Optimistic render of the user's turn comes FIRST, before any network
+  // call. Otherwise the first message of a new session sits invisible
+  // for the ~200-500 ms session-creation roundtrip and the screen looks
+  // frozen. If session creation then fails, we roll the turn back so
+  // the user isn't left looking at an orphan question with no reply.
   async function send(text: string) {
+    setTurns((t) => [...t, { role: 'user', text }]);
+    setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 50);
     let sid = sessionId;
     if (!sid) {
       try {
         const created = await ensureSession.mutateAsync();
         sid = created.session_id;
       } catch {
-        return; // ensureSession's onError already alerted
+        // Roll back the optimistic turn — ensureSession's onError already alerted.
+        setTurns((t) => t.slice(0, -1));
+        return;
       }
     }
-    setTurns((t) => [...t, { role: 'user', text }]);
     ask.mutate({ question: text, sid });
-    setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 50);
   }
 
   return (
@@ -192,7 +200,16 @@ export default function Ask() {
               ? <MeBubble key={i} text={t.text} />
               : <AiBubble key={i} text={t.text} sources={t.sources} />,
           )}
-          {ask.isPending ? <Pulse label="Studae is thinking" align="left" /> : null}
+          {/* Show the pulse the moment the user sends, not just once
+              /ask is in flight. On the first message of a new session
+              there's a ~200-500 ms gap while POST /session creates the
+              chat_sessions row, and `ask.isPending` is still false
+              during that window. Falling back to either mutation being
+              pending makes the pulse appear immediately under the user's
+              optimistic turn on every send. */}
+          {ask.isPending || ensureSession.isPending ? (
+            <Pulse label="Studae is thinking" align="left" />
+          ) : null}
         </ScrollView>
         <Composer
           onSend={send}
