@@ -54,25 +54,35 @@ PAGE_TEXT_THRESHOLD = 200  # chars per page that count as "real text"
 
 
 def extract_pages(file_bytes: bytes, filename: str,
-                  doc_id: str | None = None) -> tuple[list[tuple[int, str]], str]:
-    """Return (pages, source_type) where pages is a list of (page_number, text).
+                  doc_id: str | None = None
+                  ) -> tuple[list[tuple[int, str]], str, set[int]]:
+    """Return (pages, source_type, ocr_page_numbers).
 
-    Each page is decided independently: if it has substantial selectable text
-    (≥ PAGE_TEXT_THRESHOLD chars), we use it directly; otherwise we OCR it.
-    This handles mixed PDFs (mostly text with a few image pages) correctly and
-    catches image-heavy PDFs with a thin text overlay.
+    `pages` is a list of (page_number, text). Each page is decided
+    independently: if it has substantial selectable text (≥
+    PAGE_TEXT_THRESHOLD chars), we use it directly; otherwise we OCR it.
+    This handles mixed PDFs (mostly text with a few image pages)
+    correctly and catches image-heavy PDFs with a thin text overlay.
 
-    When `doc_id` is provided, emits `documents.progress` updates per page so
-    the frontend's ingest screen can show OCR progress on long scanned PDFs
-    (otherwise this stage looks frozen for minutes).
+    `ocr_page_numbers` is the set of 1-indexed page numbers that had to
+    be OCR'd. The caller uses this to skip figure extraction on those
+    pages — an OCR'd page has no real text layer, so the only thing
+    PyMuPDF can extract from it is the page-scan image itself, which
+    would leak the answer if shown as a "figure" during a test.
+
+    When `doc_id` is provided, emits `documents.progress` updates per
+    page so the frontend's ingest screen can show OCR progress on long
+    scanned PDFs (otherwise this stage looks frozen for minutes).
     """
     if not filename.lower().endswith(".pdf"):
-        return [(1, read_image(file_bytes))], "image"
+        # Single-image upload: no concept of "page scan vs embedded
+        # diagram" applies — return an empty exclude set.
+        return [(1, read_image(file_bytes))], "image", set()
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     total = len(doc)
     pages = []
-    ocr_pages = 0
+    ocr_page_numbers: set[int] = set()
     for i, page in enumerate(doc):
         if doc_id is not None and (i == 0 or (i + 1) % 5 == 0 or i + 1 == total):
             _set_progress(doc_id, f"reading page {i + 1} of {total}")
@@ -82,13 +92,15 @@ def extract_pages(file_bytes: bytes, filename: str,
         else:
             img = page.get_pixmap(dpi=150).tobytes("png")
             pages.append((i + 1, read_image(img)))
-            ocr_pages += 1
+            ocr_page_numbers.add(i + 1)
 
-    source_type = "scanned" if ocr_pages > total / 2 else "pdf_text"
-    return pages, source_type
+    source_type = "scanned" if len(ocr_page_numbers) > total / 2 else "pdf_text"
+    return pages, source_type, ocr_page_numbers
 
 
-def extract_page_images(file_bytes: bytes, filename: str) -> dict[int, list[bytes]]:
+def extract_page_images(file_bytes: bytes, filename: str,
+                        skip_pages: set[int] | None = None
+                        ) -> dict[int, list[bytes]]:
     """Return {1-indexed-page: [png_bytes, ...]} of embedded images in a PDF.
 
     Used so the lesson screen can render the diagram alongside its
@@ -96,16 +108,28 @@ def extract_page_images(file_bytes: bytes, filename: str) -> dict[int, list[byte
     text (so Claude can still reason over them); the rendered image just
     sits next to the chunk it belongs to.
 
+    `skip_pages` is the set of page numbers (1-indexed) to leave alone.
+    The ingest caller passes the set of OCR'd page numbers: on those
+    pages the only "image" PyMuPDF can find IS the page scan itself
+    (because the page had no real text layer), and showing a page scan
+    as a figure during a test would leak the answer. Skipping the
+    extraction means those chunks just have `figure_path = null` — they
+    still render as text-only citations in /ask and /lesson, and the
+    test screen has nothing to leak.
+
     Skips images smaller than 80 x 80 px to filter out icons / bullets.
     Returns an empty dict for non-PDFs (single-image uploads already are
     the figure).
     """
     if not filename.lower().endswith(".pdf"):
         return {}
+    skip = skip_pages or set()
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     out: dict[int, list[bytes]] = {}
     for i, page in enumerate(doc):
         page_no = i + 1
+        if page_no in skip:
+            continue
         for img in page.get_images(full=True):
             xref = img[0]
             try:
@@ -196,16 +220,22 @@ def ingest_document(user_id: str, doc_id: str, file_bytes: bytes, filename: str)
                  doc_id, filename, len(file_bytes))
         _set_progress(doc_id, "extracting text")
 
-        pages, source_type = extract_pages(file_bytes, filename, doc_id=doc_id)
-        log.info("ingest extracted %d pages, source_type=%s for doc_id=%s",
-                 len(pages), source_type, doc_id)
+        pages, source_type, ocr_page_numbers = extract_pages(
+            file_bytes, filename, doc_id=doc_id)
+        log.info(
+            "ingest extracted %d pages, source_type=%s, ocr_pages=%d for doc_id=%s",
+            len(pages), source_type, len(ocr_page_numbers), doc_id)
 
         # Pull embedded images from the PDF and upload them to storage now,
         # so we can attach paths to chunks below. Failure here is non-fatal:
         # chunks still get text + bracketed descriptions.
         page_figure_paths: dict[int, list[str]] = {}
         try:
-            page_pngs = extract_page_images(file_bytes, filename)
+            # Skip image extraction on OCR'd pages — the only "image"
+            # there is the page-scan itself, which contains the text and
+            # would leak the answer if shown as a figure during a test.
+            page_pngs = extract_page_images(
+                file_bytes, filename, skip_pages=ocr_page_numbers)
             for page_no, pngs in page_pngs.items():
                 for idx, png in enumerate(pngs):
                     fp = f"{user_id}/{doc_id}/figures/p{page_no}_{idx}.png"

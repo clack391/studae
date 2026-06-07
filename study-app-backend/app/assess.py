@@ -127,7 +127,10 @@ def _is_single_page_doc(document_id, user_id) -> bool:
     On those PDFs (HTML-to-PDF exports, web printouts) figure_paths get
     assigned to chunks positionally during ingest, so a chunk about
     topic X may carry an image about topic Y. Suppress all figures on
-    those docs to avoid wrong-image bugs in lessons, tests, and exams."""
+    those docs to avoid wrong-image bugs in lessons, tests, and exams.
+    Applies everywhere — including review — because the figure-to-topic
+    mapping is genuinely wrong.
+    """
     if not document_id or not user_id:
         return False
     try:
@@ -137,6 +140,26 @@ def _is_single_page_doc(document_id, user_id) -> bool:
         distinct = {r.get("page_number") for r in rows
                     if r.get("page_number") is not None}
         return len(distinct) <= 1
+    except Exception:
+        return False
+
+
+def _is_scanned_doc(document_id, user_id) -> bool:
+    """True when the document's `source_type` is `scanned`. Used to
+    suppress figures ONLY during test-taking (where the page-scan image
+    would leak the question's source text). Review still shows them,
+    since by then the assessment is graded and the student can learn
+    from seeing the full source page. New uploads don't need this
+    check — the ingest fix already skips image extraction on OCR'd
+    pages — but it protects pre-existing scanned PDFs without forcing
+    a reupload."""
+    if not document_id or not user_id:
+        return False
+    try:
+        doc = supabase.table("documents").select("source_type") \
+            .eq("id", document_id).eq("user_id", user_id) \
+            .execute().data or []
+        return bool(doc and (doc[0].get("source_type") or "").lower() == "scanned")
     except Exception:
         return False
 
@@ -306,14 +329,22 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
         "questions that ask the student to look at an image, based on "
         "what the material is about.\n"
         "- For each question, include a boolean field "
-        "\"needs_figure\": true if the question requires the student "
-        "to look at a figure/image to answer (e.g. 'Identify the "
-        "lesion pattern shown', 'Which disease is depicted in the "
-        "image?', 'What growth stage is illustrated?'). Set false if "
-        "the question can be answered from text alone (e.g. 'What "
-        "fungus causes anthracnose?', 'Name three symptoms of "
-        "powdery mildew', 'Explain the role of nitrogen in plant "
-        "growth').\n"
+        "\"needs_figure\": true if the question would normally be "
+        "phrased around a visual (e.g. 'Identify the lesion pattern "
+        "shown', 'Which disease is depicted in the image?'). Set "
+        "false for plain-text questions.\n"
+        "- CRITICAL: every question MUST be answerable from the "
+        "question text alone, with NO image actually shown. Test "
+        "screens never display figures (they would leak the answer "
+        "from the source page). When you write a figure-style "
+        "question, describe the visual details in WORDS inside the "
+        "question — e.g. instead of 'Identify the disease shown in "
+        "the image below', write 'A plant shows orange-brown to "
+        "purplish-brown spots on the underside of leaves. Which "
+        "disease of Hollyhock does this describe?'. The student "
+        "answers from the verbal description; the visual is only a "
+        "post-submission review aid. Do NOT write 'examine the image "
+        "below' / 'see the figure' as the only cue.\n"
         "- Aim for roughly:\n"
         "  * Visually-driven material (anything where figures, "
         "diagrams, charts, or images are part of how the subject is "
@@ -849,12 +880,16 @@ def _verify_test_figures(questions_with_figures):
 
 def safe_question(q, suppress_figures=False):
     # Only attach figures to questions whose TEXT genuinely asks the
-    # student to look at one ("identify the figure shown", "what is in
-    # the image"). Without this gate, every text-only question would
-    # also get a figure shown next to it just because the source chunks
-    # it was generated from happened to have figure_paths attached at
-    # ingest time. That makes a 30-question written test look like a
-    # picture-book test, which is not how a real classroom exam works.
+    # student to look at one ("identify the figure shown", "what does
+    # the image show"). For text-only questions the figure would just
+    # be visual noise.
+    #
+    # On the answer-leak risk: figure_path is only populated for chunks
+    # on TEXT-extracted pages now (ingest skips image extraction for
+    # OCR'd pages because those "images" are the page scans themselves
+    # and would leak the question's source text). So a figure surviving
+    # to this point is a real embedded diagram / photo / chart, not a
+    # rasterised textbook page. Safe to show during the test.
     qtext = q.get("question_text") or ""
     needs_fig = _question_needs_figure(qtext)
     figure_sources = (
@@ -887,8 +922,17 @@ def start_assessment(user_id, assessment_id):
     qs = supabase.table("questions").select("*") \
         .eq("assessment_id", assessment_id).order("created_at").execute().data
     # Compute once per assessment, then pass the flag into every safe_question
-    # so we don't re-hit the chunks table once per question.
-    suppress = _is_single_page_doc(a.get("document_id"), user_id)
+    # so we don't re-hit the chunks table once per question. Test-taking
+    # suppresses figures for two cases:
+    #   - single-page docs (figure-to-topic mapping is positional / wrong)
+    #   - scanned-source PDFs (the only "figure" is the page-scan that
+    #     contains the question's source text — would leak the answer)
+    # Review uses a narrower check (single-page only) so a scanned doc
+    # still shows its source pages on the post-submit screen.
+    suppress = (
+        _is_single_page_doc(a.get("document_id"), user_id)
+        or _is_scanned_doc(a.get("document_id"), user_id)
+    )
     safe_qs = [safe_question(q, suppress_figures=suppress) for q in qs]
 
     # Figure verification. Split questions into two buckets:
