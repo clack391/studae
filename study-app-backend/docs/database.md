@@ -2,6 +2,8 @@
 
 Postgres 15 (via Supabase), with the `vector` (pgvector) extension. 13 tables total, all under the `public` schema, plus the auth-managed `auth.users` table that `public.users` extends.
 
+> **Spinning up a fresh Supabase project?** Paste [`schema.sql`](schema.sql) into the Supabase SQL Editor and run it. The file is a single self-contained migration of everything in this doc — tables, indexes, RLS policies, the `handle_new_user` trigger, the `match_chunks` RPC, storage policies for the `uploads` bucket, and the seeded `plans` rows. Safe to re-run. After the script: create the `uploads` storage bucket (Private), copy the JWT Secret into the backend's `SUPABASE_JWT_SECRET` env var, and you're done. The per-table sections below are the reference for why each column / policy exists; the SQL file is what you actually execute.
+
 ## Schema overview
 
 Every table cascades from `auth.users` (managed by Supabase Auth). Deleting an auth user deletes its `public.users` profile, which in turn cascades through every owned row in every domain table, plus removes the user's storage folder via the application-layer `DELETE /me/account` logic.

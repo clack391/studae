@@ -93,7 +93,7 @@ cd ../study-app-frontend && npm run typecheck # frontend TypeScript check
 
 - **Backend**: FastAPI, `uv` for env management, Anthropic SDK, Google `google-genai` SDK, Supabase Python SDK, PyMuPDF for PDF text + image extraction, slowapi for rate limiting.
 - **Frontend**: Expo SDK 54, Expo Router, React Native, `@tanstack/react-query`, `@supabase/supabase-js` with AsyncStorage session persistence, `expo-document-picker` and `expo-image-picker` for upload, `react-native-reanimated` for animations.
-- **AI**: Claude `claude-sonnet-4-6` for lessons, questions, grading, summaries. Gemini `gemini-2.5-flash-lite` for OCR, `gemini-embedding-001` for RAG embeddings.
+- **AI**: Claude `claude-sonnet-4-6` for lessons, question generation, grading, summaries, and answering /ask + /ask-photo. Claude `claude-haiku-4-5` (text and vision) for the lighter-but-frequent passes — multi-question extraction from photos, topic-tagging questions against the document outline, AI relevance filtering of sources, and vision-verifying that test figures match their questions. Gemini `gemini-2.5-flash-lite` for ingestion OCR; `gemini-embedding-001` for RAG embeddings.
 - **Data**: Supabase Postgres with `pgvector`. Auth + storage in the same Supabase project.
 
 ## License

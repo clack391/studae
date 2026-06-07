@@ -27,7 +27,7 @@ Create a Supabase project. In **Project Settings → API**, copy:
 
 In **Storage**, create a private bucket called `uploads`.
 
-In **SQL Editor**, run the schema from the Phase 1–5 setup guides. By the end you should have tables `users`, `documents`, `chunks`, `chat_sessions`, `messages`, `assessments`, `questions`, `answers`, `plans`, `usage`, all with RLS policies, plus the `handle_new_user` trigger, the `match_chunks` function, storage policies on the `uploads` bucket, and three seeded rows in `plans` (basic, standard, pro).
+In **SQL Editor**, paste and run [`docs/schema.sql`](docs/schema.sql). It creates all 13 tables (`users`, `documents`, `chunks`, `chat_sessions`, `messages`, `assessments`, `questions`, `answers`, `plans`, `usage`, `flashcards`, `flashcard_reviews`, `focus_areas`) with their RLS policies, the `handle_new_user` trigger, the `match_chunks` pgvector RPC, the storage policies on the `uploads` bucket, and three seeded rows in `plans` (basic, standard, pro). Safe to re-run. See [`docs/database.md`](docs/database.md) for column-by-column rationale.
 
 ### 2. Env vars
 
