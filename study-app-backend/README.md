@@ -6,10 +6,15 @@ FastAPI backend for a study app. A student uploads learning material (PDFs or im
 
 - **FastAPI** + `uvicorn` (Python, managed by `uv`)
 - **Supabase** — Postgres + auth + storage + `pgvector`
-- **Anthropic** `claude-sonnet-4-6` — outlines, answering, teaching
+- **Anthropic Claude** — model tiering split by what the call actually has to do:
+  - `claude-sonnet-4-6` — test/exam generation, regenerating a figure-leaking question as text-only, and per-answer grading at submit. These three calls drive quality and are worth the price.
+  - `claude-haiku-4-5` — everything else: lessons, typed and photo /ask, topic/outline summaries, flashcard generation, weak-area revision, document outline at ingest, source relevance filtering, photo question extraction, topic tagging, vision verification of test figures (match + leaks_answer). ~1/3 the Sonnet cost per call.
 - **Google Gemini**
-  - `gemini-2.5-flash-lite` — OCR for scanned PDFs and photos
-  - `gemini-embedding-001` (1536-dim) — chunk and query embeddings
+  - `gemini-2.5-flash-lite` — OCR for scanned PDFs at ingest, and vision-detecting diagram regions on OCR'd pages so real diagrams render in lessons without leaking the whole page scan.
+  - `gemini-2.5-flash` — handwriting photo OCR on `/answer/save-photo` (stronger model on the surface where handwriting matters most).
+  - `gemini-embedding-001` (1536-dim) — chunk and query embeddings.
+
+Every Claude / Gemini call goes through `track_claude` / `track_gemini` / `track_gemini_embed` in `app/clients.py`. Each call logs `step`, `model`, `input` / `output` tokens, and computed `cost_usd` to the backend logger and appends a JSON line to `data/usage.jsonl`. Run `python -m scripts.usage_total today|week|month|all` from the backend root for a per-step / per-model cost breakdown.
 
 ## Setup
 
@@ -179,6 +184,7 @@ Invoke with `python -m scripts.<name>` from the project root so the `app` packag
 - `scripts.check_status <document_id>` — show ingestion status, chunk count, and outline preview for a document.
 - `scripts.eval_grading` — run a small set of hand-graded theory answers through `grade_theory` and flag where Claude disagrees with the human score. Run before launch and after any change to the grading prompt.
 - `scripts.set_plan <email> <plan> [--days N]` — change a user's subscription plan and expiry. Use until Paystack is wired up.
+- `scripts.usage_total [today|week|month|all]` — sum `data/usage.jsonl` and print total cost, per-step breakdown, and per-model breakdown. No argument defaults to all-time. Cheap way to see "did that prompt change blow up the output token count?" or "what's a 30-question test really costing me?"
 
 ## Tests
 
@@ -221,7 +227,8 @@ study-app-backend/
 │   ├── get_token.py
 │   ├── check_status.py
 │   ├── eval_grading.py
-│   └── set_plan.py
+│   ├── set_plan.py
+│   └── usage_total.py         # sums data/usage.jsonl into cost breakdowns
 ├── tests/                     # smoke/integration tests, run with `python -m tests.<name>`
 │   ├── __init__.py
 │   ├── smoke_test.py          # 33 of 40 endpoints, fast, non-destructive
@@ -233,7 +240,7 @@ study-app-backend/
 │   ├── user-flow.md
 │   ├── frontend-integration.md   # Expo / React Native cheatsheet
 │   └── database.md               # schema reference: tables, FKs, RLS, indexes, RPCs
-├── data/                      # local fixtures (e.g., test PDFs)
+├── data/                      # local fixtures (test PDFs) + usage.jsonl (LLM cost log)
 ├── .env                       # secrets (gitignored)
 ├── .env.example               # template for new contributors
 ├── LICENSE                    # All Rights Reserved

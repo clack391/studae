@@ -123,6 +123,14 @@ scripts/
 
 Theme tokens are in `src/lib/theme.ts` and mirror the wireframe's `wf/styles.css`.
 
+## Premium overlay patterns
+
+Three patterns to use instead of system dialogs / generic spinners. Reach for them whenever a feature needs a confirmation, an error notice, or a wait state.
+
+- **`ConfirmSheet`** (`src/components/ui/ConfirmSheet.tsx`) — ink-bordered bottom sheet that replaces every `Alert.alert`. Supports `tone: 'danger' | 'neutral'`, `singleAction: true` for OK-only acknowledgements (no Cancel), and a `confirmLabel` / `cancelLabel`. Used for sign-out, two-step clear-data, the "All data cleared" success notice, the clear-data error notice, and any new destructive or informational confirmation. Render it as a sibling of the `Screen` and drive it from a `useState` boolean. **Do not use `Alert.alert` for anything that can become a `ConfirmSheet`** — the system Material dialog clashes hard with the rest of the app.
+- **Loading / processing overlay** (`Pulse.AIThinking` + `IndeterminateBar`) — absolute-positioned full-screen view with an indeterminate progress bar, a hand-styled title, and a rotating tip list. Used on the upload screen (uploading + processing phases), the test results screen during grading, and the review screen while answers re-fetch. Take cues from `src/app/upload.tsx` and `src/app/test/result/[id].tsx` for the structure.
+- **Upload-to-processing handoff** — after `POST /upload` returns, do **not** bounce the user back to Home. Hold them on the upload screen, swap the overlay from "Uploading" to "Processing", and poll `api.getDocument(id)` with a React Query `refetchInterval` until `status` flips to `ready` (then navigate) or `failed` (then surface the error). Surface the doc's display name above `AIThinking` — pick from `docPoll.data?.title` when available, otherwise the picker filename cleaned through `cleanFilename` (strip extension, swap separators, collapse whitespace). The seamless transition is the whole point; do not skip it.
+
 ## Typecheck
 
 ```bash
