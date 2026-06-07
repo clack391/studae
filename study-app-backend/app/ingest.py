@@ -317,9 +317,13 @@ def embed(text: str) -> list[float]:
 
 
 def build_outline(text: str) -> str:
+    # Haiku 4.5 handles structured outline extraction well at ~1/3 the
+    # cost of Sonnet 4.6. Watch the next few ingests for outline quality
+    # (topic granularity, off-topic bleed). Roll back the model string if
+    # outlines start missing topics or grouping unrelated sections.
     msg = track_claude(
         "build_outline",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=2000,
         messages=[{"role": "user", "content": OUTLINE_PROMPT + text[:50000] + STYLE_RULES}],
     )

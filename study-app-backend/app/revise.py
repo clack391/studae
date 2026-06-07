@@ -56,9 +56,15 @@ def create_practice(user_id, document_id, level, num=None, time_limit=None):
         f"Material:\n{source}"
         + STYLE_RULES
     )
+    # Haiku 4.5 for revise: this is the highest-risk Haiku swap because
+    # it generates real questions (objective + theory). These are
+    # practice, not graded assessments, so a slightly weaker question
+    # only costs the student one round of revision. Watch the next few
+    # revise sets and flip back to claude-sonnet-4-6 here if questions
+    # feel shallow or repetitive vs the previous Sonnet output.
     raw = track_claude(
         "revise_weak_areas",
-        model="claude-sonnet-4-6", max_tokens=4000,
+        model="claude-haiku-4-5", max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
     questions = extract_json(raw)["questions"]

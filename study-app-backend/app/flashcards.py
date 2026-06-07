@@ -44,9 +44,13 @@ def generate_cards(user_id, document_id, num, level, focus_area_id=None):
     else:
         source, chunk_ids = document_text_sample(document_id)
     prompt = GENERATE_PROMPT.format(num=num, level=level, source=source) + STYLE_RULES
+    # Haiku 4.5 for flashcards: simpler than test questions (no rubric,
+    # no distractors, just front + concise back). Watch a fresh batch
+    # for prompts that are too vague or backs that miss the key idea.
+    # Flip back to claude-sonnet-4-6 if quality dips.
     raw = track_claude(
         "generate_flashcards",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text

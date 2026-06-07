@@ -737,9 +737,13 @@ def answer_photo_question(user_id, session_id, document_id,
     # reply.
     max_tokens = min(3000, 800 + 600 * len(extracted))
 
+    # Haiku 4.5 for Ask: RAG-grounded synthesis (material is in the
+    # prompt), not derivation. Quality is comparable for typical study
+    # questions at ~1/3 the Sonnet cost. Flip back to claude-sonnet-4-6
+    # here if Pro-level multi-step reasoning starts feeling thin.
     reply = track_claude(
         "answer_photo_question",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=max_tokens,
         system=system,
         messages=msgs,
@@ -1082,9 +1086,13 @@ def answer_question(user_id, session_id, document_id, question, level):
         "content": f"Material:\n{context}\n\nQuestion: {question}",
     })
 
+    # Haiku 4.5 for typed Ask. Same rationale as answer_photo_question:
+    # RAG-grounded synthesis, not derivation. Flip back to
+    # claude-sonnet-4-6 here if answers start feeling shallow on hard
+    # questions, especially at Pro level.
     reply = track_claude(
         "answer_question",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=1500,
         system=system,
         messages=msgs,
@@ -1173,9 +1181,12 @@ def summarize_topic(user_id, document_id, topic, level):
         level_hint=LEVELS.get(level, LEVELS["novice"]),
         context=context,
     ) + STYLE_RULES
+    # Haiku 4.5 for topic summaries: pure summarization at ~1/3 Sonnet
+    # cost. Flip back to claude-sonnet-4-6 here if summaries miss key
+    # points or feel surface-level.
     summary = track_claude(
         "summarize_topic",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
@@ -1192,9 +1203,11 @@ def summarize_outline(document_id, level):
         outline=outline,
         level_hint=LEVELS.get(level, LEVELS["novice"]),
     ) + STYLE_RULES
+    # Haiku 4.5 for outline summaries. Same rationale as
+    # summarize_topic. Flip back to claude-sonnet-4-6 here if needed.
     summary = track_claude(
         "summarize_outline",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
@@ -1305,9 +1318,13 @@ def teach_next(user_id, session_id):
         f"Material for this topic:\n{context}"
     )
 
+    # Haiku 4.5 handles lesson prose well at ~1/3 the Sonnet cost. Watch
+    # the next batch of lessons for tone and depth at expert level (Haiku
+    # can lean simpler than Sonnet for advanced material). Flip back to
+    # claude-sonnet-4-6 here if professional-level lessons feel thin.
     lesson = track_claude(
         "generate_lesson",
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5",
         max_tokens=1500,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
