@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 
@@ -31,6 +32,108 @@ OUTLINE_PROMPT = (
 
 MODEL_FAST = "gemini-2.5-flash-lite"
 MODEL_STRONG = "gemini-2.5-flash"
+
+
+DIAGRAM_DETECT_PROMPT = (
+    "Look at this study-page image. Find every distinct diagram, "
+    "illustration, photograph, chart, anatomical figure, structural "
+    "formula, schematic, map, or other visual figure that is NOT just "
+    "text.\n\n"
+    "IGNORE: blocks of text, headings, page numbers, footers, headers, "
+    "decorative borders, tables of pure text data, the page background.\n\n"
+    "For each visual figure, return its bounding box as normalized "
+    "coordinates where x and y are the TOP-LEFT corner and w / h are "
+    "the width / height, all in fractions of the page (0.0 to 1.0).\n\n"
+    "Return ONLY a JSON object: {\"figures\":[{\"x\":0.10,\"y\":0.42,"
+    "\"w\":0.35,\"h\":0.30}, ...]}. Empty array if the page is text-only."
+)
+
+
+@transient()
+def _detect_page_diagrams(page) -> list[bytes]:
+    """Vision-detect real diagrams on a scanned PDF page and return
+    cropped PNG bytes for each. Used in place of `page.get_images()` on
+    OCR'd pages, where PyMuPDF's only "image" is the whole-page scan
+    (which would leak the question's source text if used as a figure).
+
+    Pipeline:
+      1. Render the full page at 150 dpi.
+      2. Ask Gemini Vision for the bounding boxes of every non-text
+         visual region on the page.
+      3. For each bounding box, ask PyMuPDF to render JUST that clip of
+         the original page (still at 150 dpi) → that becomes the figure.
+
+    Returns an empty list on any failure so the caller can fall back to
+    treating the page as text-only.
+    """
+    page_png = page.get_pixmap(dpi=150).tobytes("png")
+    try:
+        resp = gemini.models.generate_content(
+            model=MODEL_FAST,
+            contents=[
+                types.Part.from_bytes(data=page_png, mime_type="image/png"),
+                DIAGRAM_DETECT_PROMPT,
+            ],
+        )
+        raw = (resp.text or "").strip()
+    except Exception as e:
+        log.info("diagram detect vision call failed: %s: %s",
+                 type(e).__name__, e)
+        return []
+
+    # Strip markdown fences Gemini sometimes wraps JSON in.
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+    if not raw:
+        return []
+    try:
+        # Tolerate both `[...]` and `{"figures":[...]}` shapes.
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, dict):
+        bboxes = parsed.get("figures") or parsed.get("boxes") or []
+    elif isinstance(parsed, list):
+        bboxes = parsed
+    else:
+        bboxes = []
+    if not isinstance(bboxes, list):
+        return []
+
+    out: list[bytes] = []
+    rect = page.rect
+    for box in bboxes:
+        if not isinstance(box, dict):
+            continue
+        try:
+            x = float(box.get("x", 0))
+            y = float(box.get("y", 0))
+            w = float(box.get("w", 0))
+            h = float(box.get("h", 0))
+        except (TypeError, ValueError):
+            continue
+        # Sanity-check the box: in-bounds and not too tiny.
+        if not (0 <= x < 1 and 0 <= y < 1 and 0 < w <= 1 and 0 < h <= 1):
+            continue
+        if w * h < 0.02:  # less than 2% of page area — likely an icon
+            continue
+        clip = fitz.Rect(
+            rect.x0 + x * rect.width,
+            rect.y0 + y * rect.height,
+            rect.x0 + (x + w) * rect.width,
+            rect.y0 + (y + h) * rect.height,
+        )
+        try:
+            pix = page.get_pixmap(dpi=150, clip=clip)
+            if pix.width < 80 or pix.height < 80:
+                continue
+            out.append(pix.tobytes("png"))
+        except Exception:
+            continue
+    return out
 
 
 @transient()
@@ -108,14 +211,18 @@ def extract_page_images(file_bytes: bytes, filename: str,
     text (so Claude can still reason over them); the rendered image just
     sits next to the chunk it belongs to.
 
-    `skip_pages` is the set of page numbers (1-indexed) to leave alone.
-    The ingest caller passes the set of OCR'd page numbers: on those
-    pages the only "image" PyMuPDF can find IS the page scan itself
-    (because the page had no real text layer), and showing a page scan
-    as a figure during a test would leak the answer. Skipping the
-    extraction means those chunks just have `figure_path = null` — they
-    still render as text-only citations in /ask and /lesson, and the
-    test screen has nothing to leak.
+    `skip_pages` is the set of page numbers (1-indexed) that were OCR'd
+    (no real text layer). On those pages PyMuPDF's `page.get_images()`
+    would only find the whole-page scan, which leaks question text. We
+    handle those pages differently: send the page to Gemini Vision and
+    ask for the bounding boxes of every distinct diagram / illustration
+    / photograph, then crop just those regions from the original page
+    rendering. That way scanned textbooks with real diagrams (anatomy,
+    chemistry, etc) still get the diagrams as figures, but the
+    surrounding text never makes it into a `figure_path`.
+
+    For text-extracted pages (NOT in skip_pages), uses the normal
+    PyMuPDF embedded-image path.
 
     Skips images smaller than 80 x 80 px to filter out icons / bullets.
     Returns an empty dict for non-PDFs (single-image uploads already are
@@ -129,7 +236,18 @@ def extract_page_images(file_bytes: bytes, filename: str,
     for i, page in enumerate(doc):
         page_no = i + 1
         if page_no in skip:
+            # Scanned page — use vision-detected diagram regions.
+            try:
+                cropped = _detect_page_diagrams(page)
+            except Exception as e:
+                log.warning(
+                    "diagram detect failed for page=%s: %s: %s",
+                    page_no, type(e).__name__, e)
+                cropped = []
+            if cropped:
+                out.setdefault(page_no, []).extend(cropped)
             continue
+        # Text-extracted page — pull embedded image objects.
         for img in page.get_images(full=True):
             xref = img[0]
             try:
@@ -229,16 +347,27 @@ def ingest_document(user_id: str, doc_id: str, file_bytes: bytes, filename: str)
         # Pull embedded images from the PDF and upload them to storage now,
         # so we can attach paths to chunks below. Failure here is non-fatal:
         # chunks still get text + bracketed descriptions.
+        #
+        # Two storage subdirs:
+        #   - <user>/<doc>/figures/...  → embedded images from text PDF
+        #     pages (PyMuPDF's `page.get_images()` path). Safe.
+        #   - <user>/<doc>/diagrams/... → vision-cropped diagrams from
+        #     OCR'd PDF pages (`_detect_page_diagrams` path). Safe — only
+        #     the diagram region was cropped, not the surrounding text.
+        # The runtime "is this safe to show on a test?" check distinguishes
+        # the two by path prefix: cropped diagrams pass the check on any
+        # doc; figures/ uploads pass only on non-scanned docs (because on
+        # OLDER scanned uploads — before vision detection landed —
+        # everything under figures/ was actually a whole-page scan).
         page_figure_paths: dict[int, list[str]] = {}
         try:
-            # Skip image extraction on OCR'd pages — the only "image"
-            # there is the page-scan itself, which contains the text and
-            # would leak the answer if shown as a figure during a test.
             page_pngs = extract_page_images(
                 file_bytes, filename, skip_pages=ocr_page_numbers)
             for page_no, pngs in page_pngs.items():
+                is_ocr_page = page_no in ocr_page_numbers
+                subdir = "diagrams" if is_ocr_page else "figures"
                 for idx, png in enumerate(pngs):
-                    fp = f"{user_id}/{doc_id}/figures/p{page_no}_{idx}.png"
+                    fp = f"{user_id}/{doc_id}/{subdir}/p{page_no}_{idx}.png"
                     supabase.storage.from_("uploads").upload(
                         fp, png, {"content-type": "image/png", "upsert": "true"})
                     page_figure_paths.setdefault(page_no, []).append(fp)

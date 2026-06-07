@@ -47,8 +47,67 @@ def extract_json(raw):
     start = raw.find("{")
     if start < 0:
         raise ValueError(f"No JSON object found in model output: {raw[:200]}")
-    obj, _ = json.JSONDecoder().raw_decode(raw[start:])
-    return obj
+    body = raw[start:]
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(body)
+        return obj
+    except json.JSONDecodeError:
+        # Salvage path: if Claude got cut off mid-question (truncated
+        # output), recover whatever complete question objects landed
+        # before the break. Look for the LAST balanced "}" that closes
+        # an entry inside the "questions" array, then synthesise a
+        # well-formed envelope around the salvaged prefix.
+        salvaged = _salvage_questions_json(body)
+        if salvaged is not None:
+            return salvaged
+        raise
+
+
+def _salvage_questions_json(body: str):
+    """When the model's `{"questions":[...,...,<truncated>...]}` output
+    is cut off mid-question, drop the dangling tail and close the array
+    on the last complete object. Returns the parsed dict on success or
+    None when no usable prefix exists."""
+    qs_key = body.find('"questions"')
+    if qs_key < 0:
+        return None
+    arr_start = body.find("[", qs_key)
+    if arr_start < 0:
+        return None
+    depth = 0
+    last_complete = -1
+    i = arr_start + 1
+    n = len(body)
+    in_str = False
+    escape = False
+    while i < n:
+        ch = body[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    last_complete = i
+            elif ch == "]" and depth == 0:
+                break
+        i += 1
+    if last_complete < 0:
+        return None
+    rebuilt = body[:last_complete + 1] + "]}"
+    try:
+        return json.loads(rebuilt)
+    except json.JSONDecodeError:
+        return None
 
 
 def document_text_sample(document_id, max_chars=40000):
@@ -272,7 +331,8 @@ def _strip_figure_placeholders(text: str) -> str:
     return _FIGURE_PLACEHOLDER_RE.sub(" ", text)
 
 
-def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=None):
+def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
+                       topic=None, source_type=None):
     """Generate questions. Caller provides the pre-resolved source +
     chunk_ids so we can swap between whole-doc and topic-scoped RAG."""
     topic_clause = ""
@@ -307,6 +367,34 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
     # Claude works from plain text the way a teacher would.
     cleaned_source = _strip_figure_placeholders(source)
 
+    # Figure-question target depends on doc type. Scanned PDFs now get
+    # diagram regions vision-cropped from each OCR'd page, so real
+    # diagrams (anatomy, structural formulas, schematics) do render on
+    # the test screen for new uploads. We still target a slightly lower
+    # figure-question share than text PDFs — scanned-text-only docs
+    # (literature, history) genuinely have no diagrams to test on, and
+    # OLDER scanned uploads (before diagram detection landed) have their
+    # figures suppressed at runtime, so a figure-style question would
+    # come out unanswerable. Text PDFs with embedded illustrations get
+    # the full 25-30% target.
+    source_is_scanned = (source_type or "").lower() == "scanned"
+    if source_is_scanned:
+        visual_lo = max(1, num // 10)  # ~10%
+        visual_hi = max(1, num * 18 // 100)  # ~18%
+        figure_guidance_extra = (
+            " The material is a scanned PDF. Real diagrams from the "
+            "pages (anatomy, formulas, schematics, charts) are extracted "
+            "at ingest, so you CAN write figure-questions about them — "
+            "but pure-text pages have no extractable visual, so most "
+            "questions should still be plain text. Only write a figure-"
+            "style question when the source chunk genuinely depicts a "
+            "labelled visual, not just text."
+        )
+    else:
+        visual_lo = max(1, num * 25 // 100)
+        visual_hi = max(1, num * 30 // 100)
+        figure_guidance_extra = ""
+
     prompt = (
         f"You are setting a {level}-level {kind} from the material below. "
         f"{count_rule} "
@@ -333,18 +421,12 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
         "phrased around a visual (e.g. 'Identify the lesion pattern "
         "shown', 'Which disease is depicted in the image?'). Set "
         "false for plain-text questions.\n"
-        "- CRITICAL: every question MUST be answerable from the "
-        "question text alone, with NO image actually shown. Test "
-        "screens never display figures (they would leak the answer "
-        "from the source page). When you write a figure-style "
-        "question, describe the visual details in WORDS inside the "
-        "question — e.g. instead of 'Identify the disease shown in "
-        "the image below', write 'A plant shows orange-brown to "
-        "purplish-brown spots on the underside of leaves. Which "
-        "disease of Hollyhock does this describe?'. The student "
-        "answers from the verbal description; the visual is only a "
-        "post-submission review aid. Do NOT write 'examine the image "
-        "below' / 'see the figure' as the only cue.\n"
+        "- Figures from the material ARE rendered alongside "
+        "needs_figure=true questions on the test screen. So a figure-"
+        "style question can directly point at the figure (\"Identify "
+        "the lesion pattern shown\", \"Which disease is depicted?\"). "
+        "Do not refuse to phrase a question around the visual on the "
+        "assumption that the figure won't render — it will.\n"
         "- Aim for roughly:\n"
         "  * Visually-driven material (anything where figures, "
         "diagrams, charts, or images are part of how the subject is "
@@ -355,8 +437,8 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
         "labelled figures) → about 25-30% of questions should have "
         "needs_figure=true. Scale to the test size: "
         f"out of {num} questions that is roughly "
-        f"{max(1, num * 25 // 100)}-{max(1, num * 30 // 100)} figure "
-        "questions.\n"
+        f"{visual_lo}-{visual_hi} figure questions."
+        f"{figure_guidance_extra}\n"
         "  * Text-heavy concept material (literature, history, "
         "care guides, principles, processes, definitions, prose "
         "explanations with no critical visual content) → no more "
@@ -392,9 +474,18 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test", topic=No
         f"Material:\n{cleaned_source}"
         + STYLE_RULES
     )
+    # Scale max_tokens with question count. Each question now carries
+    # extra fields (needs_figure, explanation for objective, rubric for
+    # theory, source_chunks list) so the per-question footprint is
+    # roughly 350-600 tokens. With the old fixed 4000-token cap a
+    # 30-question test got cut off mid-JSON and raised
+    # JSONDecodeError("Unterminated string"). Budget 600 tokens per
+    # question plus a 1500-token preamble buffer, capped at 32k for
+    # safety (Sonnet 4.6 supports much more output).
+    max_tokens = min(32000, 1500 + 600 * num)
     raw = claude.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4000,
+        max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
     questions = extract_json(raw)["questions"]
@@ -507,14 +598,18 @@ def _media_type_for(path: str) -> str:
 
 
 def _haiku_vision_figure_matches(q: dict, figure_chunks: list) -> bool:
-    """Vision-verify that at least one candidate figure actually depicts
-    what the question (and its correct answer) describes. Downloads the
-    image bytes from Supabase storage, sends them to Haiku 4.5 with the
-    question text and correct answer for context, and asks for a yes/no.
+    """Vision-verify that at least one candidate figure (a) actually
+    depicts what the question asks about AND (b) doesn't visibly leak
+    the correct answer (via labels, captions, or annotations on the
+    image itself). Downloads the image bytes from Supabase storage,
+    sends them to Haiku 4.5 with the question text and correct answer
+    for context, asks for two booleans.
 
-    Returns True on the first candidate that matches. Returns True on
-    any download / model error so a flaky storage read or a vision hiccup
-    can't aggressively regenerate good questions.
+    A figure passes when `match=true AND leaks_answer=false`. Returns
+    True on the first candidate that passes; False if no candidate
+    passes (caller will regenerate the question as text-only). Returns
+    True on any download / model error so a flaky storage read or a
+    vision hiccup can't aggressively regenerate good questions.
     """
     import base64
     from .chat import _extract_json_obj
@@ -541,23 +636,50 @@ def _haiku_vision_figure_matches(q: dict, figure_chunks: list) -> bool:
             return True
         prompt = (
             "You are checking whether the figure attached to a test "
-            "question actually depicts the right subject. The figure "
-            "image is shown above this text.\n\n"
+            "question is safe to show the student. The figure image is "
+            "shown above this text.\n\n"
             f"Question: {qtext}\n"
             f"{answer_clause}"
-            "Decide: does the image plausibly depict what the question "
-            "asks about (and what the correct answer describes)? Be "
-            "lenient — if the image is a reasonable illustration of the "
-            "topic, say match=true. Only say match=false when the image "
-            "is clearly off-topic (e.g. a cover graphic, an unrelated "
-            "plant species, an Amazon storefront, blank/black).\n\n"
-            "Return ONLY a JSON object: {\"match\": true} or "
-            "{\"match\": false}."
+            "Decide TWO things:\n"
+            "1. `match`: does the image plausibly depict what the "
+            "question asks about (and what the correct answer "
+            "describes)? Be lenient — only say match=false when the "
+            "image is clearly off-topic (cover graphic, unrelated "
+            "species, blank/black, an unrelated product).\n"
+            "2. `leaks_answer`: could a student looking at THIS IMAGE "
+            "alone read the correct answer (or text that clearly "
+            "identifies it) directly off the image, without prior "
+            "knowledge of the source material? Set true when ANY of:\n"
+            "   - The image is a page-scan / textbook page / "
+            "screenshot of prose, where the answer text appears "
+            "anywhere on the page (even in a normal-size paragraph or "
+            "sentence).\n"
+            "   - The image is a table or chart where the answer "
+            "appears as a row label, column label, or cell value "
+            "(e.g. a 'Crop → Treatment' table where the question asks "
+            "the treatment for a specific crop).\n"
+            "   - The image has a caption, header, title, or label "
+            "that names the answer directly (e.g. captioned "
+            "'Anthracnose' when the answer is 'Anthracnose').\n"
+            "Set false when:\n"
+            "   - The image is a pure photograph or illustration with "
+            "no readable text (a diseased leaf, a microscope slide, "
+            "an organ, an insect).\n"
+            "   - Labels exist but name PARTS of the depicted thing, "
+            "not the answer (e.g. 'midrib', 'lesion' labels on a leaf "
+            "diagram when the answer is the disease name).\n"
+            "   - Only letter labels (A, B, C, D) or scientific "
+            "notation (X40 magnification, scale bars, axis labels) "
+            "are visible.\n"
+            "Use OCR-style reading of the image — if the literal "
+            "answer words appear legibly anywhere, flag it.\n\n"
+            "Return ONLY a JSON object: "
+            "{\"match\": true, \"leaks_answer\": false}."
         )
         try:
             raw = claude.messages.create(
                 model="claude-haiku-4-5",
-                max_tokens=80,
+                max_tokens=120,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -571,13 +693,18 @@ def _haiku_vision_figure_matches(q: dict, figure_chunks: list) -> bool:
                 }],
             ).content[0].text
             decision = _extract_json_obj(raw)
-            if bool(decision.get("match", True)):
+            matched = bool(decision.get("match", True))
+            leaks = bool(decision.get("leaks_answer", False))
+            if matched and not leaks:
                 return True
+            if leaks:
+                log.info("vision verify: figure %s leaks the answer "
+                         "for question %r — dropping", fp, qtext[:60])
         except Exception as e:
             log.warning("vision verify call failed, keeping question: %s: %s",
                         type(e).__name__, e)
             return True
-    # No candidate passed the vision check — figure is genuinely wrong.
+    # No candidate passed both checks — figure is wrong or leaks.
     return False
 
 
@@ -673,7 +800,23 @@ def create_assessment(user_id, document_id, kind, fmt, level, num, time_limit,
     else:
         source, chunk_ids = document_text_sample(document_id)
 
-    questions = generate_questions(source, chunk_ids, fmt, level, num, kind, topic=topic)
+    # Pull source_type so the generator can tune its figure-question
+    # target to the doc type (scanned PDFs → very few figure questions
+    # since figures don't render at test time; text PDFs with embedded
+    # diagrams → full 25-30% target). Cheap single-row lookup.
+    src_type = ""
+    try:
+        doc_row = supabase.table("documents").select("source_type") \
+            .eq("id", document_id).eq("user_id", user_id) \
+            .execute().data or []
+        if doc_row:
+            src_type = (doc_row[0].get("source_type") or "").strip()
+    except Exception:
+        pass
+
+    questions = generate_questions(
+        source, chunk_ids, fmt, level, num, kind,
+        topic=topic, source_type=src_type)
 
     # Figure-mismatch repair pass. For every figure-dependent question
     # ("identify the disease shown in the figure"), verify with Haiku
@@ -739,16 +882,25 @@ def seconds_left(assessment):
     return max(0, assessment["time_limit_seconds"] - int(elapsed))
 
 
-def _figure_sources(chunk_ids, suppress_figures=False):
+def _figure_sources(chunk_ids, suppress_figures=False, doc_is_scanned=False):
     """Return source entries that have a figure image, no text snippet.
 
     Used by the test-taking screen so the student sees the diagram a
     question is about without the chunk text leaking the answer. The
     review screen still gets the full sources (with snippets) via
     _resolve_sources because the test is already submitted there.
-    Returns nothing when suppress_figures is True — single-page docs
-    can't reliably tie a figure to a question, so we'd rather show no
-    figure than a misleading one.
+
+    `suppress_figures=True` skips everything (single-page docs, where
+    figure-to-topic mapping is unreliable).
+
+    `doc_is_scanned=True` is a SOFTER filter: it only drops figures
+    whose storage path is under `/figures/` (the bucket where
+    embedded-image extracts land). On scanned-source docs that pre-date
+    the vision-cropping ingest, those were whole-page rasters and would
+    leak text. Cropped diagrams from the new ingest land under
+    `/diagrams/` and pass through — that's how reuploading a scanned
+    textbook unlocks its real diagrams for tests without leaking any
+    surrounding text.
 
     The returned dicts also include the chunk's content snippet (private
     to the backend) so a downstream Haiku verification step can judge
@@ -764,16 +916,22 @@ def _figure_sources(chunk_ids, suppress_figures=False):
         .in_("id", chunk_ids).execute().data or []
     out = []
     for r in rows:
-        if r.get("figure_path"):
-            out.append({
-                "chunk_id": r["id"],
-                "page_number": r.get("page_number"),
-                "figure_path": r["figure_path"],
-                "snippet": "",
-                # Internal-only context for the verification pass.
-                # Stripped before the response goes out.
-                "_chunk_snippet": clean_snippet(r.get("content") or "", 240),
-            })
+        fp = r.get("figure_path")
+        if not fp:
+            continue
+        if doc_is_scanned and "/diagrams/" not in fp:
+            # Older scanned-doc upload — figures/ paths are whole-page
+            # rasters, skip to avoid leaking the question's source text.
+            continue
+        out.append({
+            "chunk_id": r["id"],
+            "page_number": r.get("page_number"),
+            "figure_path": fp,
+            "snippet": "",
+            # Internal-only context for the verification pass.
+            # Stripped before the response goes out.
+            "_chunk_snippet": clean_snippet(r.get("content") or "", 240),
+        })
     return out
 
 
@@ -878,23 +1036,22 @@ def _verify_test_figures(questions_with_figures):
                 for q in questions_with_figures}
 
 
-def safe_question(q, suppress_figures=False):
+def safe_question(q, suppress_figures=False, doc_is_scanned=False):
     # Only attach figures to questions whose TEXT genuinely asks the
     # student to look at one ("identify the figure shown", "what does
     # the image show"). For text-only questions the figure would just
     # be visual noise.
     #
-    # On the answer-leak risk: figure_path is only populated for chunks
-    # on TEXT-extracted pages now (ingest skips image extraction for
-    # OCR'd pages because those "images" are the page scans themselves
-    # and would leak the question's source text). So a figure surviving
-    # to this point is a real embedded diagram / photo / chart, not a
-    # rasterised textbook page. Safe to show during the test.
+    # suppress_figures: hard kill (single-page docs).
+    # doc_is_scanned: softer filter that drops `figures/` paths (whole-
+    # page rasters from older scanned-doc uploads) but keeps `diagrams/`
+    # paths (vision-cropped diagrams from new uploads).
     qtext = q.get("question_text") or ""
     needs_fig = _question_needs_figure(qtext)
     figure_sources = (
         _figure_sources(q.get("source_chunk_ids") or [],
-                        suppress_figures=suppress_figures)
+                        suppress_figures=suppress_figures,
+                        doc_is_scanned=doc_is_scanned)
         if needs_fig else []
     )
     return {
@@ -921,19 +1078,21 @@ def start_assessment(user_id, assessment_id):
 
     qs = supabase.table("questions").select("*") \
         .eq("assessment_id", assessment_id).order("created_at").execute().data
-    # Compute once per assessment, then pass the flag into every safe_question
-    # so we don't re-hit the chunks table once per question. Test-taking
-    # suppresses figures for two cases:
-    #   - single-page docs (figure-to-topic mapping is positional / wrong)
-    #   - scanned-source PDFs (the only "figure" is the page-scan that
-    #     contains the question's source text — would leak the answer)
-    # Review uses a narrower check (single-page only) so a scanned doc
-    # still shows its source pages on the post-submit screen.
-    suppress = (
-        _is_single_page_doc(a.get("document_id"), user_id)
-        or _is_scanned_doc(a.get("document_id"), user_id)
-    )
-    safe_qs = [safe_question(q, suppress_figures=suppress) for q in qs]
+    # Compute once per assessment, then pass into every safe_question.
+    #   suppress: hard-kill for single-page docs (figure mapping wrong).
+    #   doc_is_scanned: softer filter for scanned-source PDFs.
+    #     OLD scanned uploads → all figure_paths under `figures/` are
+    #     whole-page scans → drop them.
+    #     NEW scanned uploads (post diagram-detection ingest) → cropped
+    #     diagrams land under `diagrams/` and pass the filter, so a
+    #     reuploaded scanned textbook DOES get its real diagrams shown.
+    doc_id = a.get("document_id")
+    suppress = _is_single_page_doc(doc_id, user_id)
+    doc_is_scanned = _is_scanned_doc(doc_id, user_id)
+    safe_qs = [
+        safe_question(q, suppress_figures=suppress, doc_is_scanned=doc_is_scanned)
+        for q in qs
+    ]
 
     # Figure verification. Split questions into two buckets:
     #
