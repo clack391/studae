@@ -111,8 +111,8 @@ export default function NewFocus() {
                       <View
                         style={{
                           width: 20, height: 20, borderRadius: 6, borderWidth: 2,
-                          borderColor: on ? C.accent : C.line,
-                          backgroundColor: on ? C.accent : 'transparent',
+                          borderColor: on ? C.accentD : C.line,
+                          backgroundColor: on ? C.accentD : 'transparent',
                           alignItems: 'center', justifyContent: 'center',
                         }}
                       >

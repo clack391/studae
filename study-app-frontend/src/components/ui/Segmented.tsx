@@ -16,6 +16,9 @@ export function Segmented<V extends string>({ value, options, onChange }: {
           <Pressable
             key={opt.value}
             onPress={() => onChange(opt.value)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: on }}
+            accessibilityLabel={opt.label}
             style={{
               flex: 1,
               paddingVertical: 8,
@@ -39,6 +42,9 @@ export function Chip({ label, on, onPress }: { label: string; on?: boolean; onPr
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: !!on }}
+      accessibilityLabel={label}
       style={{
         borderWidth: 1.6,
         borderColor: on ? C.accent : C.line,

@@ -19,6 +19,7 @@ import type {
   Dashboard,
   DeletedResponse,
   DisputeResponse,
+  DocStatus,
   DocumentDetail,
   DocumentProgress,
   FocusArea,
@@ -45,6 +46,15 @@ import type {
 const BASE = process.env.EXPO_PUBLIC_API_BASE;
 if (!BASE) throw new Error('Missing EXPO_PUBLIC_API_BASE in .env');
 export const API_BASE = BASE;
+
+// --- /documents/{id}/reprocess ------------------------------------------
+// Mirrors the backend handler's return shape {document_id, status}. Defined
+// here rather than in types.ts because it is local to this single endpoint;
+// `status` is "processing" on success.
+export interface ReprocessResponse {
+  document_id: string;
+  status: DocStatus;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -137,6 +147,11 @@ export const api = {
   dashboard: () => GET<Dashboard>('/dashboard'),
   meAccess: () => GET<MeAccess>('/me/access'),
   updateSettings: (body: SettingsBody) => POST<SettingsResponse>('/settings', body),
+  // Upload a profile photo. Single image under the multipart field name
+  // "file" (mirrors uploadDocument's pattern); the backend stores it at
+  // {user_id}/avatar.jpg in the "uploads" bucket and returns the storage
+  // KEY as avatar_url. Resolve that key via signedUrl() to render it.
+  uploadAvatar: (form: FormData) => UPLOAD<{ avatar_url: string }>('/me/avatar', form),
   deleteAccount: () => DELETE<AccountDeletedResponse>('/me/account'),
   clearMyData: () => DELETE<{ cleared: true }>('/me/data'),
 
@@ -144,10 +159,20 @@ export const api = {
   signedUrl: (path: string) => GET<{ url: string }>('/files/signed-url', { path }),
 
   // --- Documents ---
+  // Upload contract: the multipart field name is always "files", carrying
+  // 1..N files (even for a single file). Callers build the FormData with one
+  // or more form.append('files', ...) entries; the backend reads
+  // files: list[UploadFile]. Returns {document_id}.
   uploadDocument: (form: FormData) => UPLOAD<UploadResponse>('/upload', form),
   getDocument: (id: string) => GET<DocumentDetail>(`/documents/${id}`),
   deleteDocument: (id: string) => DELETE<DeletedResponse>(`/documents/${id}`),
   documentProgress: (id: string) => GET<DocumentProgress>(`/documents/${id}/progress`),
+  // Re-runs ingestion from the stored source files. The backend resumes from
+  // the existing ingest_cursor (it does NOT reset progress) and flips status
+  // back to "processing" so the ingest screen can resume polling. Returns
+  // {document_id, status}. 400 if the original source files are gone.
+  reprocessDocument: (documentId: string) =>
+    POST<ReprocessResponse>(`/documents/${documentId}/reprocess`),
   summarize: (id: string, body: { topic?: string; level: Level }) =>
     POST<SummarizeResponse>(`/documents/${id}/summarize`, body),
 

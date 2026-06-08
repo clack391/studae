@@ -58,7 +58,12 @@ export function AppBar({ title, back, onBack, right, brand }: {
         {/* Left slot — fixed width, matched to right slot for true centering. */}
         <View style={{ width: SIDE_WIDTH, flexDirection: 'row', alignItems: 'center' }}>
           {back ? (
-            <Pressable onPress={onBack ?? (() => router.back())} hitSlop={10}>
+            <Pressable
+              onPress={onBack ?? (() => router.back())}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+            >
               <Ionicons name="chevron-back" size={26} color={C.ink} />
             </Pressable>
           ) : null}
@@ -117,10 +122,16 @@ export function AppBar({ title, back, onBack, right, brand }: {
   );
 }
 
-export function IconButton({ name, onPress }: { name: keyof typeof Ionicons.glyphMap; onPress?: () => void }) {
+export function IconButton({ name, onPress, accessibilityLabel }: { name: keyof typeof Ionicons.glyphMap; onPress?: () => void; accessibilityLabel?: string }) {
   const C = useTheme();
   return (
-    <Pressable onPress={onPress} hitSlop={10} style={{ padding: 5 }}>
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={{ padding: 5 }}
+    >
       <Ionicons name={name} size={20} color={C.ink} />
     </Pressable>
   );

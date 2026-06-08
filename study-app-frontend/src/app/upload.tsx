@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { Alert, Modal, Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as DocumentPicker from 'expo-document-picker';
@@ -9,6 +9,8 @@ import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row } from '@/components/ui/Card';
 import { T } from '@/components/ui/T';
+import { Field } from '@/components/ui/Field';
+import { Button } from '@/components/ui/Button';
 import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { api, ApiError } from '@/lib/api';
@@ -32,6 +34,108 @@ function PickRow({ icon, title, sub, onPress, busy }: { icon: keyof typeof Ionic
       </Card>
     </Pressable>
   );
+}
+
+// Bottom sheet shown after a PDF is picked: choose to process the whole
+// book or a single chapter. Modeled on ConfirmSheet (dimmed scrim, ink-
+// bordered card sliding from the bottom) but with a chapter text input.
+// "A chapter" stays disabled until the input is non-empty.
+function ChapterSheet({
+  visible,
+  fileName,
+  chapter,
+  onChangeChapter,
+  onWholeBook,
+  onChapter,
+  onCancel,
+}: {
+  visible: boolean;
+  fileName: string;
+  chapter: string;
+  onChangeChapter: (s: string) => void;
+  onWholeBook: () => void;
+  onChapter: () => void;
+  onCancel: () => void;
+}) {
+  const C = useTheme();
+  const canChapter = chapter.trim().length > 0;
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      <Pressable
+        onPress={onCancel}
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' }}
+      >
+        <Pressable
+          onPress={() => {/* swallow taps inside sheet */}}
+          style={{
+            backgroundColor: C.card,
+            borderTopWidth: 2,
+            borderLeftWidth: 2,
+            borderRightWidth: 2,
+            borderColor: C.ink,
+            borderTopLeftRadius: 22,
+            borderTopRightRadius: 22,
+            paddingHorizontal: 16,
+            paddingTop: 18,
+            paddingBottom: 28,
+            gap: 14,
+          }}
+        >
+          <View style={{ alignItems: 'center' }}>
+            <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: C.line, marginBottom: 12 }} />
+          </View>
+          <T v="handH2">How much of this PDF?</T>
+          <T v="small">
+            {fileName
+              ? `"${fileName}" looks like a textbook. Process the whole book, or just one chapter to save time and cost.`
+              : 'Process the whole book, or just one chapter to save time and cost.'}
+          </T>
+          <Field
+            label="Chapter (optional)"
+            placeholder="e.g. 5 or V"
+            value={chapter}
+            onChangeText={onChangeChapter}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={canChapter ? onChapter : undefined}
+          />
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+            <Button label="Whole book" kind="plain" block onPress={onWholeBook} style={{ flex: 1 }} />
+            <Button label="A chapter" kind="pri" block disabled={!canChapter} onPress={onChapter} style={{ flex: 1 }} />
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// Document types we accept beyond images. The picker filters by MIME type,
+// but some platforms report Markdown as text/plain or octet-stream, so we
+// keep the wildcard-free list broad and let the backend make the final call.
+const DOC_MIME_TYPES = [
+  'application/pdf',
+  // .docx
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  // .pptx
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // .txt
+  'text/plain',
+  // .md (some platforms report it as text/plain or text/x-markdown)
+  'text/markdown',
+  'text/x-markdown',
+];
+
+// The single fields we need off a picked document to build FormData and
+// the overlay name. Kept narrow so the chapter sheet can hold a picked
+// PDF between selection and upload.
+type PickedFile = { uri: string; name: string; mimeType: string };
+
+// A picked file is a PDF when the OS reports the pdf MIME type or the
+// filename ends in .pdf — some platforms hand back a generic
+// octet-stream, so we check both. Only PDFs get the chapter sheet.
+function isPdf(file: PickedFile): boolean {
+  return file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.name);
 }
 
 // Make a filename presentable in the loading overlay. Strips the
@@ -68,6 +172,13 @@ export default function Upload() {
   // during upload; replaced by the backend's stored title once it's
   // available from the poll (the backend usually has a cleaner title).
   const [materialName, setMaterialName] = useState<string | null>(null);
+  // When the user picks a single PDF, we don't upload immediately —
+  // first we surface a small sheet so they can choose "Whole book" or a
+  // specific chapter (cheaper to process). `pendingPdf` holds the picked
+  // file while that sheet is open; `chapterText` is the chapter input.
+  // Only PDFs trigger this; other file types upload whole right away.
+  const [pendingPdf, setPendingPdf] = useState<PickedFile | null>(null);
+  const [chapterText, setChapterText] = useState('');
 
   const docPoll = useQuery({
     queryKey: ['ingest-poll', processingDocId],
@@ -115,7 +226,7 @@ export default function Upload() {
 
   function handleErr(e: any) {
     if (on402(e, router, 'document')) return;
-    if (e instanceof ApiError && e.status === 413) Alert.alert('Too large', 'File exceeds the 100 MB limit.');
+    if (e instanceof ApiError && e.status === 413) Alert.alert('Too large', 'A file exceeds the size limit (PDF 100 MB, each image 10 MB).');
     else Alert.alert('Upload failed', e?.message ?? 'Unknown error');
   }
 
@@ -145,18 +256,67 @@ export default function Upload() {
     throw lastErr;
   }
 
-  async function sendPdf() {
-    setBusy('pdf');
+  // Pick a single document file. Accepts PDF plus office/text formats
+  // (.docx, .pptx, .txt, .md). The backend routes by extension: a single
+  // PDF runs the PDF pipeline, a single office/text file becomes one
+  // document. Always sent under the shared "files" multipart field.
+  //
+  // For a single PDF we don't upload straight away — we open the chapter
+  // sheet so the user can process the whole book or just one chapter
+  // (cheaper). Every other format uploads whole immediately, as before.
+  async function sendDocument() {
+    setBusy('doc');
+    // When we hand off to the chapter sheet we keep `busy` set (the
+    // sheet owns it and clears it on confirm/cancel). This local flag
+    // lets the `finally` know not to clear it — reading the state here
+    // would be stale within the same render.
+    let handedToSheet = false;
     try {
-      const res = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+      const res = await DocumentPicker.getDocumentAsync({ type: DOC_MIME_TYPES, copyToCacheDirectory: true });
       if (res.canceled) return;
-      const file = res.assets[0];
+      const asset = res.assets[0];
+      // Normalize once so the sheet + upload share the same shape.
+      const picked: PickedFile = {
+        uri: asset.uri,
+        name: asset.name ?? 'document',
+        mimeType: asset.mimeType ?? 'application/octet-stream',
+      };
+      if (isPdf(picked)) {
+        // Defer to the chapter sheet so the user can choose whole book
+        // vs. a single chapter before we upload. The card stays faded
+        // until they make a choice or dismiss the sheet.
+        handedToSheet = true;
+        setChapterText('');
+        setPendingPdf(picked);
+        return;
+      }
+      // uploadDocumentFile sets its own busy/finally; we re-clear here.
+      await uploadDocumentFile(picked);
+    } catch (e: any) {
+      handleErr(e);
+      setUploading(false);
+      setMaterialName(null);
+    } finally {
+      if (!handedToSheet) setBusy(null);
+    }
+  }
+
+  // Build the FormData for a single picked document and run the upload +
+  // processing handoff. `chapter` is appended only when present and
+  // non-empty (whole-book uploads omit the field entirely, preserving
+  // the original behaviour). Shared by the immediate (non-PDF) path and
+  // the chapter-sheet path.
+  async function uploadDocumentFile(file: PickedFile, chapter?: string) {
+    setBusy('doc');
+    try {
       const form = new FormData();
-      form.append('file', {
+      form.append('files', {
         uri: file.uri,
-        name: file.name ?? 'document.pdf',
-        type: 'application/pdf',
+        name: file.name,
+        type: file.mimeType,
       } as any);
+      const trimmed = chapter?.trim();
+      if (trimmed) form.append('chapter', trimmed);
       setMaterialName(cleanFilename(file.name) || 'document');
       setUploading(true);
       const up = await uploadWithRetry(form);
@@ -175,6 +335,33 @@ export default function Upload() {
     }
   }
 
+  // Chapter sheet actions. "Whole book" uploads with no chapter field;
+  // "A chapter" requires non-empty input and passes it through. Both
+  // close the sheet first, then kick off the upload.
+  function onChooseWholeBook() {
+    const file = pendingPdf;
+    if (!file) return;
+    setPendingPdf(null);
+    void uploadDocumentFile(file);
+  }
+
+  function onChooseChapter() {
+    const file = pendingPdf;
+    const trimmed = chapterText.trim();
+    if (!file || !trimmed) return;
+    setPendingPdf(null);
+    void uploadDocumentFile(file, trimmed);
+  }
+
+  function onDismissChapterSheet() {
+    setPendingPdf(null);
+    setBusy(null);
+  }
+
+  // Pick image(s). Camera takes one shot; the library lets the user
+  // multi-select several photos at once. Multiple images become ONE
+  // document whose pages are the images IN THE ORDER selected, so we
+  // append each asset under the shared "files" field in that order.
   async function sendImage(fromCamera: boolean) {
     const key = fromCamera ? 'camera' : 'lib';
     setBusy(key);
@@ -185,16 +372,26 @@ export default function Upload() {
       if (!perm.granted) return Alert.alert(fromCamera ? 'Camera' : 'Photos', 'Permission required');
       const r = fromCamera
         ? await ImagePicker.launchCameraAsync({ quality: 0.8 })
-        : await ImagePicker.launchImageLibraryAsync({ allowsMultipleSelection: false, quality: 0.8 });
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.8 });
       if (r.canceled) return;
-      const a = r.assets[0];
+      // Assets arrive in selection order — preserve it so the resulting
+      // document's pages line up with how the user picked them.
+      const assets = r.assets;
+      if (!assets.length) return;
       const form = new FormData();
-      form.append('file', {
-        uri: a.uri,
-        name: a.fileName ?? `page.${(a.mimeType ?? 'image/jpeg').split('/')[1] ?? 'jpg'}`,
-        type: a.mimeType ?? 'image/jpeg',
-      } as any);
-      setMaterialName(cleanFilename(a.fileName) || (fromCamera ? 'camera photo' : 'photo'));
+      assets.forEach((a, i) => {
+        form.append('files', {
+          uri: a.uri,
+          name: a.fileName ?? `page-${i + 1}.${(a.mimeType ?? 'image/jpeg').split('/')[1] ?? 'jpg'}`,
+          type: a.mimeType ?? 'image/jpeg',
+        } as any);
+      });
+      const first = assets[0];
+      setMaterialName(
+        assets.length > 1
+          ? `${assets.length} photos`
+          : cleanFilename(first.fileName) || (fromCamera ? 'camera photo' : 'photo'),
+      );
       setUploading(true);
       const up = await uploadWithRetry(form);
       bustDocListCaches();
@@ -216,10 +413,20 @@ export default function Upload() {
       <AppBar back title="Add a chapter" />
       <Screen>
         <T style={{ textAlign: 'center' }}>Pick a source. Studae reads it once and teaches from it forever.</T>
-        <PickRow icon="document-text-outline" title="Choose a PDF" sub="A textbook or chapter file" onPress={sendPdf} busy={busy === 'pdf'} />
+        <PickRow icon="document-text-outline" title="Choose a file" sub="PDF, Word, PowerPoint, or text" onPress={sendDocument} busy={busy === 'doc'} />
         <PickRow icon="camera-outline" title="Take a photo" sub="Snap a page of your notebook" onPress={() => sendImage(true)} busy={busy === 'camera'} />
-        <PickRow icon="images-outline" title="Pick from library" sub="An image already on your phone" onPress={() => sendImage(false)} busy={busy === 'lib'} />
+        <PickRow icon="images-outline" title="Pick from library" sub="One or more photos of your notes" onPress={() => sendImage(false)} busy={busy === 'lib'} />
       </Screen>
+
+      <ChapterSheet
+        visible={!!pendingPdf}
+        fileName={pendingPdf ? cleanFilename(pendingPdf.name) || pendingPdf.name : ''}
+        chapter={chapterText}
+        onChangeChapter={setChapterText}
+        onWholeBook={onChooseWholeBook}
+        onChapter={onChooseChapter}
+        onCancel={onDismissChapterSheet}
+      />
 
       {uploading || processingDocId ? (
         // Absolute overlay covers the screen for the whole upload →

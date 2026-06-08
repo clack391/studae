@@ -1,4 +1,144 @@
 import * as Speech from 'expo-speech';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+type Voice = { id: string; name: string };
+
+// Selected TTS voice. Voice identifiers are device-specific (they come from
+// Speech.getAvailableVoicesAsync), so this is persisted locally rather than on
+// the server. Hydrated on module load into a module var so the synchronous
+// speakLesson can read it without awaiting.
+const VOICE_KEY = 'studae.ttsVoice';
+let _voiceId: string | undefined;
+let _voiceMeta: Voice | null = null;
+AsyncStorage.getItem(VOICE_KEY)
+  .then((raw) => {
+    if (!raw) return;
+    try {
+      const v = JSON.parse(raw) as Voice;
+      _voiceMeta = v;
+      _voiceId = v?.id || undefined;
+    } catch {
+      _voiceId = raw || undefined;
+    }
+  })
+  .catch(() => {});
+
+/** All voices the device's TTS engine offers (empty list on failure). */
+export async function listVoices(): Promise<Speech.Voice[]> {
+  try {
+    return await Speech.getAvailableVoicesAsync();
+  } catch {
+    return [];
+  }
+}
+
+export type CuratedVoice = { id: string; name: string; accent: string; gender?: 'female' | 'male' };
+
+// Allowlist of natural-sounding human English voices (Apple), male + female
+// across accents. We curate by name rather than blocklisting junk so the
+// picker NEVER shows the novelty/robotic voices (Bells, Boing, Zarvox,
+// Whisper, Trinoids, Fred, Albert, the Eloquence character voices, ...).
+const VOICE_GENDER: Record<string, 'female' | 'male'> = {
+  // American
+  samantha: 'female', allison: 'female', ava: 'female', susan: 'female',
+  nicky: 'female', zoe: 'female', joelle: 'female', noelle: 'female',
+  aaron: 'male', tom: 'male', evan: 'male', nathan: 'male',
+  // British
+  kate: 'female', serena: 'female', stephanie: 'female', martha: 'female',
+  daniel: 'male', oliver: 'male', arthur: 'male',
+  // Australian
+  karen: 'female', matilda: 'female', catherine: 'female', lee: 'male',
+  // Irish / South African / Indian
+  moira: 'female', tessa: 'female', veena: 'female', rishi: 'male',
+};
+
+const ACCENT_BY_LANG: Record<string, string> = {
+  'en-us': 'American', 'en-gb': 'British', 'en-au': 'Australian', 'en-ie': 'Irish',
+  'en-za': 'South African', 'en-in': 'Indian', 'en-nz': 'New Zealand', 'en-sc': 'Scottish',
+};
+function accentFor(lang?: string): string {
+  const l = (lang || '').toLowerCase();
+  return ACCENT_BY_LANG[l] || (l.startsWith('en') ? 'English' : (lang || ''));
+}
+const isEnhanced = (q: unknown) => String(q ?? '').toLowerCase().includes('enhanced');
+const ACCENT_ORDER = ['American', 'British', 'Australian', 'Irish', 'South African', 'Indian', 'New Zealand', 'Scottish', 'English'];
+
+/**
+ * Up to 20 natural human voices to offer in the picker. iOS: matches the
+ * allowlist above by voice name (picking the highest-quality variant per
+ * name). Fallback (e.g. Android, whose ids are not human names, or a device
+ * with none of the allowlisted voices): English voices minus obvious
+ * novelty/robotic ones, so the list is never empty.
+ */
+export async function listCuratedVoices(): Promise<CuratedVoice[]> {
+  const all = await listVoices();
+  const byName = new Map<string, Speech.Voice>();
+  for (const v of all) {
+    if (!(v.language || '').toLowerCase().startsWith('en')) continue;
+    const key = (v.name || '').trim().toLowerCase();
+    if (!(key in VOICE_GENDER)) continue;
+    const cur = byName.get(key);
+    if (!cur || (isEnhanced(v.quality) && !isEnhanced(cur.quality))) byName.set(key, v);
+  }
+  let out: CuratedVoice[] = [...byName.values()].map((v) => ({
+    id: v.identifier,
+    name: v.name,
+    accent: accentFor(v.language),
+    gender: VOICE_GENDER[(v.name || '').trim().toLowerCase()],
+  }));
+
+  if (out.length < 3) {
+    const NOVELTY = /bells|boing|bubbl|bahh|cellos|wobble|whisper|zarvox|trinoid|organ|jester|good news|bad news|albert|fred|junior|ralph|bruce|agnes|deranged|hysterical|princess|superstar|pipe|eloquence|grandma|grandpa|rocko|shelley|sandy|flo|reed|eddy/i;
+    const seen = new Set<string>();
+    out = all
+      .filter((v) => (v.language || '').toLowerCase().startsWith('en'))
+      .filter((v) => !NOVELTY.test(v.name || '') && !NOVELTY.test(v.identifier || ''))
+      .filter((v) => (seen.has(v.identifier) ? false : (seen.add(v.identifier), true)))
+      .map((v) => {
+        const id = (v.identifier || '').toLowerCase();
+        const gender = id.includes('female') ? ('female' as const) : id.includes('male') ? ('male' as const) : undefined;
+        return { id: v.identifier, name: v.name || v.identifier, accent: accentFor(v.language), gender };
+      });
+  }
+
+  out.sort((a, b) => {
+    const ai = ACCENT_ORDER.indexOf(a.accent), bi = ACCENT_ORDER.indexOf(b.accent);
+    if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+    if (a.gender !== b.gender) return a.gender === 'female' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  return out.slice(0, 20);
+}
+
+/** The currently chosen voice, or null for the device default. */
+export async function getTtsVoice(): Promise<Voice | null> {
+  if (_voiceMeta) return _voiceMeta;
+  const raw = await AsyncStorage.getItem(VOICE_KEY);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Voice;
+    _voiceMeta = v;
+    _voiceId = v?.id || undefined;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+/** Choose a voice (null = device default). Persists + updates the cache. */
+export async function setTtsVoice(v: Voice | null): Promise<void> {
+  _voiceMeta = v;
+  _voiceId = v?.id || undefined;
+  if (v) await AsyncStorage.setItem(VOICE_KEY, JSON.stringify(v));
+  else await AsyncStorage.removeItem(VOICE_KEY);
+}
+
+/** Speak a short sample with a specific voice so the user can hear it while
+ *  choosing. Stops any current speech first. */
+export function previewVoice(voiceId?: string) {
+  Speech.stop();
+  Speech.speak('Hi, this is how I will read your lessons aloud.', { voice: voiceId });
+}
 
 type Cbs = {
   onDone?: () => void;
@@ -70,6 +210,7 @@ export function speakLesson(text: string, cbs: Cbs = {}) {
     }
     const chunk = chunks[idx++];
     Speech.speak(chunk, {
+      voice: _voiceId,
       onDone: () => {
         if (gen !== speakGen) return;
         next();

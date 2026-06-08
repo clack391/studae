@@ -38,17 +38,30 @@ export function Button({
     ...(disabled && { opacity: 0.5 }),
   };
   let txtColor = C.ink;
-  if (kind === 'pri') { box.backgroundColor = C.accent; box.borderColor = C.accentD; txtColor = '#fff'; }
+  if (kind === 'pri') { box.backgroundColor = C.accentD; box.borderColor = C.ink; txtColor = '#fff'; }
   else if (kind === 'dark') { box.backgroundColor = C.ink; box.borderColor = C.ink; txtColor = C.card; }
   else if (kind === 'ghost') { box.backgroundColor = 'transparent'; box.borderStyle = 'dashed'; txtColor = C.ink2; }
   else if (kind === 'soft') { box.backgroundColor = C.accentSoft; box.borderColor = C.accent; txtColor = C.accentInk; }
 
-  const txtStyle: TextStyle = { fontFamily: F.hand, fontSize: dims.fs, color: txtColor, lineHeight: dims.fs + 2 };
+  // Kalam (F.hand) needs ~1.4x line height + a little bottom padding or its
+  // tall glyphs clip at the top (the same recipe the T hand variants use in
+  // theme.ts). A tight lineHeight here was cutting the tops of button labels,
+  // which read as the text "fading" into the fill.
+  const txtStyle: TextStyle = {
+    fontFamily: F.hand,
+    fontSize: dims.fs,
+    color: txtColor,
+    lineHeight: Math.round(dims.fs * 1.4),
+    paddingBottom: 2,
+  };
 
   return (
     <Pressable
       onPress={disabled ? undefined : onPress}
       onPressIn={disabled ? undefined : onPressIn}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
       style={({ pressed }) => [box, pressed && { opacity: 0.85 }, style]}
     >
       {leftIcon}

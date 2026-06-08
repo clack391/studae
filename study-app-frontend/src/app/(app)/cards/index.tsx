@@ -9,6 +9,7 @@ import { Card, Col, Row } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Chip } from '@/components/ui/Segmented';
 import { Stat } from '@/components/ui/Bar';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
@@ -51,7 +52,13 @@ export default function CardsHome() {
     queryFn: () => api.flashcardsDue({ document_id: docId, limit: 50 }),
     enabled: !!docId,
   });
-  useFocusEffect(useCallback(() => { dash.refetch(); cards.refetch(); due.refetch(); }, [docId]));
+  // refetch() ignores the queries' `enabled: !!docId` gate, so only fire the
+  // docId-scoped refetches when we actually have a docId — otherwise they hit
+  // /documents/undefined/flashcards and 500.
+  useFocusEffect(useCallback(() => {
+    dash.refetch();
+    if (docId) { cards.refetch(); due.refetch(); }
+  }, [docId]));
 
   const generate = useMutation({
     mutationFn: () => api.flashcardsGenerate({
@@ -77,18 +84,24 @@ export default function CardsHome() {
     },
   });
 
+  // Card id staged for deletion; non-null drives the on-brand ConfirmSheet
+  // in place of the OS Alert dialog.
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
   if (!readyDocs.length) {
     return (
       <View style={{ flex: 1, backgroundColor: C.paper }}>
         <AppBar title="Cards" />
         <Screen>
-          <View style={{ alignItems: 'center', marginTop: 24, gap: 8 }}>
-            <Ionicons name="albums-outline" size={40} color={C.ink3} />
-            <T v="handH3">No cards yet</T>
-            <T v="small" style={{ textAlign: 'center' }}>
-              Upload a document first. Flashcards are generated from your material.
-            </T>
-          </View>
+          <Card kind="soft" style={{ marginTop: 24 }}>
+            <View style={{ alignItems: 'center', padding: 20, gap: 8 }}>
+              <Ionicons name="albums-outline" size={40} color={C.ink3} />
+              <T v="handH3">No cards yet</T>
+              <T v="small" style={{ textAlign: 'center' }}>
+                Upload a document first. Flashcards are generated from your material.
+              </T>
+            </View>
+          </Card>
         </Screen>
       </View>
     );
@@ -181,11 +194,10 @@ export default function CardsHome() {
                   </T>
                 </Col>
                 <Pressable
-                  onPress={() => Alert.alert('Delete card?', 'This can\'t be undone.', [
-                    { text: 'Cancel' },
-                    { text: 'Delete', style: 'destructive', onPress: () => del.mutate(c.id) },
-                  ])}
+                  onPress={() => setDeleteId(c.id)}
                   hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete card"
                 >
                   <Ionicons name="trash-outline" size={18} color={C.ink2} />
                 </Pressable>
@@ -194,6 +206,16 @@ export default function CardsHome() {
           );
         })}
       </Screen>
+
+      <ConfirmSheet
+        visible={deleteId !== null}
+        tone="danger"
+        title="Delete card?"
+        message="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={() => { if (deleteId) del.mutate(deleteId); }}
+        onCancel={() => setDeleteId(null)}
+      />
     </View>
   );
 }

@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Pressable, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import { Card, Col, Row } from '@/components/ui/Card';
 import { Chip } from '@/components/ui/Segmented';
 import { Ring } from '@/components/ui/Ring';
 import { Loading } from '@/components/ui/Loading';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { daysUntil } from '@/lib/format';
@@ -56,6 +57,10 @@ export default function FocusHub() {
     },
   });
 
+  // Drives the on-brand ConfirmSheet for the destructive delete in place
+  // of the OS Alert dialog.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   const f = fa.data;
   if (!f) {
     return (
@@ -78,11 +83,10 @@ export default function FocusHub() {
         title={f.name}
         right={
           <Pressable
-            onPress={() => Alert.alert('Delete focus area?', 'You can rebuild it any time.', [
-              { text: 'Cancel' },
-              { text: 'Delete', style: 'destructive', onPress: () => del.mutate() },
-            ])}
+            onPress={() => setDeleteOpen(true)}
             hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Delete focus area"
           >
             <Ionicons name="trash-outline" size={20} color={C.ink} />
           </Pressable>
@@ -124,6 +128,16 @@ export default function FocusHub() {
           onPress={() => router.push({ pathname: '/test/create', params: { documentId: f.document_id, focusAreaId: f.id } })}
         />
       </Screen>
+
+      <ConfirmSheet
+        visible={deleteOpen}
+        tone="danger"
+        title="Delete focus area?"
+        message="You can rebuild it any time."
+        confirmLabel="Delete"
+        onConfirm={() => del.mutate()}
+        onCancel={() => setDeleteOpen(false)}
+      />
     </View>
   );
 }

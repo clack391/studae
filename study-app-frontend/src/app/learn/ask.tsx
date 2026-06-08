@@ -5,6 +5,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { AppBar } from '@/components/ui/AppBar';
+import { Button } from '@/components/ui/Button';
 import { Chip } from '@/components/ui/Segmented';
 import { AiBubble, MeBubble } from '@/components/ui/Bubble';
 import { Composer } from '@/components/ui/Composer';
@@ -269,6 +270,8 @@ export default function Ask() {
                 <Pressable
                   key={opt.value}
                   disabled={levelLocked}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
                   onPress={() => {
                     setLevel(opt.value);
                     setLevelPickerOpen(false);
@@ -309,18 +312,7 @@ export default function Ask() {
               );
             })}
             {levelLocked ? (
-              <Pressable
-                onPress={() => setLevelPickerOpen(false)}
-                style={{
-                  marginTop: 8,
-                  paddingVertical: 12,
-                  alignItems: 'center',
-                  borderRadius: 14,
-                  backgroundColor: C.ink,
-                }}
-              >
-                <T style={{ color: C.card, fontWeight: '700' }}>Got it</T>
-              </Pressable>
+              <Button label="Got it" kind="dark" block onPress={() => setLevelPickerOpen(false)} />
             ) : null}
           </Pressable>
         </Pressable>

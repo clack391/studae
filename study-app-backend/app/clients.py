@@ -88,20 +88,28 @@ def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens * p["in"] + output_tokens * p["out"]) / 1_000_000
 
 
-def _record_usage(step: str, model: str, input_tokens: int, output_tokens: int):
+def _record_usage(step: str, model: str, input_tokens: int, output_tokens: int, ctx=None):
     cost = _cost_usd(model, input_tokens, output_tokens)
     _log.info(
         "usage step=%s model=%s in=%d out=%d cost=$%.6f",
         step, model, input_tokens, output_tokens, cost,
     )
-    line = json.dumps({
+    record = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "step": step,
         "model": model,
         "input": input_tokens,
         "output": output_tokens,
         "cost_usd": round(cost, 6),
-    }, ensure_ascii=False)
+    }
+    # Optional ingest-context tags. Written as top-level fields when present;
+    # omitted entirely when there is no ctx or the key is absent.
+    if ctx:
+        if ctx.get("doc_id") is not None:
+            record["doc_id"] = ctx["doc_id"]
+        if ctx.get("session_id") is not None:
+            record["session_id"] = ctx["session_id"]
+    line = json.dumps(record, ensure_ascii=False)
     try:
         with _USAGE_LOCK:
             _USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -111,9 +119,10 @@ def _record_usage(step: str, model: str, input_tokens: int, output_tokens: int):
         _log.warning("usage log write failed: %s: %s", type(e).__name__, e)
 
 
-def track_claude(step: str, **kwargs):
+def track_claude(step: str, ctx=None, **kwargs):
     """Wrap claude.messages.create() with usage tracking. Same signature
-    and return value as the underlying call; the response is unchanged."""
+    and return value as the underlying call; the response is unchanged.
+    Optional ctx (dict with "doc_id"/"session_id") tags the usage line."""
     resp = claude.messages.create(**kwargs)
     try:
         usage = getattr(resp, "usage", None)
@@ -123,15 +132,17 @@ def track_claude(step: str, **kwargs):
                 kwargs.get("model", "unknown"),
                 int(getattr(usage, "input_tokens", 0) or 0),
                 int(getattr(usage, "output_tokens", 0) or 0),
+                ctx=ctx,
             )
     except Exception as e:
         _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
     return resp
 
 
-def track_gemini(step: str, **kwargs):
+def track_gemini(step: str, ctx=None, **kwargs):
     """Wrap gemini.models.generate_content() with usage tracking. Same
-    signature and return value as the underlying call."""
+    signature and return value as the underlying call. Optional ctx (dict
+    with "doc_id"/"session_id") tags the usage line."""
     resp = gemini.models.generate_content(**kwargs)
     try:
         usage = getattr(resp, "usage_metadata", None)
@@ -141,15 +152,17 @@ def track_gemini(step: str, **kwargs):
                 kwargs.get("model", "unknown"),
                 int(getattr(usage, "prompt_token_count", 0) or 0),
                 int(getattr(usage, "candidates_token_count", 0) or 0),
+                ctx=ctx,
             )
     except Exception as e:
         _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
     return resp
 
 
-def track_gemini_embed(step: str, **kwargs):
+def track_gemini_embed(step: str, ctx=None, **kwargs):
     """Wrap gemini.models.embed_content() — embeddings have no output
-    tokens, but input tokens still matter for cost tracking."""
+    tokens, but input tokens still matter for cost tracking. Optional ctx
+    (dict with "doc_id"/"session_id") tags the usage line."""
     resp = gemini.models.embed_content(**kwargs)
     try:
         usage = getattr(resp, "usage_metadata", None)
@@ -159,6 +172,7 @@ def track_gemini_embed(step: str, **kwargs):
                 kwargs.get("model", "unknown"),
                 int(getattr(usage, "prompt_token_count", 0) or 0),
                 0,
+                ctx=ctx,
             )
     except Exception as e:
         _log.warning("usage extract failed: %s: %s", type(e).__name__, e)

@@ -39,7 +39,12 @@ export function Composer({
       }}
     >
       {onPhoto ? (
-        <Pressable onPress={onPhoto} hitSlop={8}>
+        <Pressable
+          onPress={onPhoto}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Add photo"
+        >
           <Ionicons name="camera-outline" size={22} color={C.ink2} />
         </Pressable>
       ) : null}
@@ -65,9 +70,12 @@ export function Composer({
       <Pressable
         onPress={submit}
         disabled={sendBlocked}
+        accessibilityRole="button"
+        accessibilityLabel="Send"
+        accessibilityState={{ disabled: sendBlocked }}
         style={{
           width: 36, height: 36, borderRadius: 18,
-          backgroundColor: C.accent,
+          backgroundColor: C.accentD,
           alignItems: 'center', justifyContent: 'center',
           opacity: sendBlocked ? 0.5 : 1,
         }}

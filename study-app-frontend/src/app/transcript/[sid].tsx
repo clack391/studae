@@ -122,7 +122,7 @@ export default function Transcript() {
       <Row
         gap={8}
         style={{
-          paddingHorizontal: 14,
+          paddingHorizontal: 16,
           paddingTop: 4,
           paddingBottom: 12,
           borderBottomWidth: 1.6,

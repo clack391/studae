@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ import { T } from '@/components/ui/T';
 import { Badge } from '@/components/ui/Badge';
 import { Bar } from '@/components/ui/Bar';
 import { Button } from '@/components/ui/Button';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { DocThumb } from '@/components/domain/DocThumb';
 import { api } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
@@ -61,6 +62,7 @@ export default function DocDetail() {
   const router = useRouter();
   const qc = useQueryClient();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const doc = useQuery({ queryKey: ['doc', id], queryFn: () => api.getDocument(id!) });
   // Same cache key + limit as /history/[docId] so the two screens share the
   // result. Cached for 30 s by the global QueryClient.
@@ -91,14 +93,7 @@ export default function DocDetail() {
   });
 
   function confirmDelete() {
-    Alert.alert(
-      'Delete this document?',
-      'Everything tied to it (lessons, flashcards, tests, focus areas, results) will be removed. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => del.mutate() },
-      ],
-    );
+    setDeleteOpen(true);
   }
 
   // Prefetch the progress screen's data on touch-start so it's warm by the
@@ -130,7 +125,13 @@ export default function DocDetail() {
         onBack={() => router.navigate('/(app)/library')}
         title={d?.title ?? '…'}
         right={
-          <Pressable onPress={confirmDelete} hitSlop={10} disabled={del.isPending}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Delete document"
+            onPress={confirmDelete}
+            hitSlop={10}
+            disabled={del.isPending}
+          >
             <Ionicons name="trash-outline" size={20} color={C.ink} />
           </Pressable>
         }
@@ -265,6 +266,16 @@ export default function DocDetail() {
           ) : null}
         </Card>
       </Screen>
+
+      <ConfirmSheet
+        visible={deleteOpen}
+        tone="danger"
+        title="Delete this document?"
+        message="Everything tied to it (lessons, flashcards, tests, focus areas, results) will be removed. This cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => del.mutate()}
+        onCancel={() => setDeleteOpen(false)}
+      />
     </View>
   );
 }

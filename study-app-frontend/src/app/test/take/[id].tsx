@@ -92,7 +92,7 @@ export default function Take() {
   return (
     <View style={{ flex: 1, backgroundColor: C.paper }}>
       <AppBar back title="Test" />
-      <Row style={{ paddingHorizontal: 14, paddingBottom: 6, borderBottomWidth: 1.6, borderColor: C.line }} gap={10}>
+      <Row style={{ paddingHorizontal: 16, paddingBottom: 6, borderBottomWidth: 1.6, borderColor: C.line }} gap={10}>
         {/* Hide the running clock once the student has hit Submit. Without
             this guard the Timer kept ticking visibly while the submit
             request was in flight, which looked like the test was still
@@ -124,12 +124,18 @@ export default function Take() {
           const answered = !!answers[qq.id];
           const here = i === idx;
           return (
-            <Pressable key={qq.id} onPress={() => setIdx(i)}>
+            <Pressable
+              key={qq.id}
+              onPress={() => setIdx(i)}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel={'Question ' + (i + 1) + (answered ? ', answered' : '')}
+            >
               <View
                 style={{
                   width: 24, height: 24, borderRadius: 6, borderWidth: 1.6,
                   alignItems: 'center', justifyContent: 'center',
-                  backgroundColor: here ? C.accent : answered ? C.accentSoft : 'transparent',
+                  backgroundColor: here ? C.accentD : answered ? C.accentSoft : 'transparent',
                   borderColor: here ? C.accent : answered ? C.accent : C.line,
                 }}
               >

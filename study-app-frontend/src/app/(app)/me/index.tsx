@@ -8,12 +8,16 @@ import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row, Divider } from '@/components/ui/Card';
 import { Bar } from '@/components/ui/Bar';
 import { Badge } from '@/components/ui/Badge';
+import { Segmented } from '@/components/ui/Segmented';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
+import { VoicePicker } from '@/components/ui/VoicePicker';
 import { T } from '@/components/ui/T';
+import { Avatar } from '@/components/domain/Avatar';
 import { api } from '@/lib/api';
+import { getTtsVoice, setTtsVoice } from '@/lib/tts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/components/AuthProvider';
-import { F, useTheme, useThemeMode, type ThemeMode } from '@/lib/theme';
+import { useTheme, useThemeMode, type ThemeMode } from '@/lib/theme';
 import type { Level } from '@/lib/types';
 
 function cap(s?: string | null) {
@@ -36,66 +40,17 @@ function UsageRow({ label, used, limit, color }: { label: string; used: number; 
   );
 }
 
-function LevelToggle({ value, onChange }: { value: Level; onChange: (v: Level) => void }) {
-  const C = useTheme();
-  const opts: Level[] = ['novice', 'amateur', 'professional'];
-  return (
-    <View style={{ flexDirection: 'row', borderWidth: 2, borderColor: C.ink, borderRadius: 11, overflow: 'hidden' }}>
-      {opts.map((opt, i) => {
-        const on = opt === value;
-        return (
-          <Pressable
-            key={opt}
-            onPress={() => onChange(opt)}
-            style={{
-              flex: 1,
-              paddingVertical: 8,
-              backgroundColor: on ? C.ink : 'transparent',
-              borderRightWidth: i === opts.length - 1 ? 0 : 2,
-              borderColor: C.ink,
-              alignItems: 'center',
-            }}
-          >
-            <T style={{ fontFamily: F.hand, fontSize: 17, color: on ? C.card : C.ink2 }}>{opt === 'professional' ? 'Pro' : cap(opt)}</T>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
+const LEVEL_OPTIONS: { value: Level; label: string }[] = [
+  { value: 'novice', label: cap('novice') },
+  { value: 'amateur', label: cap('amateur') },
+  { value: 'professional', label: 'Pro' },
+];
 
-function ThemeSegmented() {
-  const C = useTheme();
-  const { mode, setMode } = useThemeMode();
-  const opts: { value: ThemeMode; label: string }[] = [
-    { value: 'system', label: 'System' },
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' },
-  ];
-  return (
-    <View style={{ flexDirection: 'row', borderWidth: 2, borderColor: C.ink, borderRadius: 11, overflow: 'hidden' }}>
-      {opts.map((opt, i) => {
-        const on = opt.value === mode;
-        return (
-          <Pressable
-            key={opt.value}
-            onPress={() => setMode(opt.value)}
-            style={{
-              flex: 1,
-              paddingVertical: 8,
-              backgroundColor: on ? C.ink : 'transparent',
-              borderRightWidth: i === opts.length - 1 ? 0 : 2,
-              borderColor: C.ink,
-              alignItems: 'center',
-            }}
-          >
-            <T style={{ fontFamily: F.hand, fontSize: 17, color: on ? C.card : C.ink2 }}>{opt.label}</T>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
 
 function TtsToggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   const C = useTheme();
@@ -125,13 +80,16 @@ export default function Me() {
   const router = useRouter();
   const qc = useQueryClient();
   const { session } = useAuth();
-  const { largerText, setLargerText } = useThemeMode();
+  const { mode, setMode, largerText, setLargerText } = useThemeMode();
   const access = useQuery({ queryKey: ['access'], queryFn: () => api.meAccess() });
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard() });
   useFocusEffect(useCallback(() => { access.refetch(); dash.refetch(); }, []));
 
   const [level, setLevel] = useState<Level>('novice');
   const [tts, setTts] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voice, setVoice] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => { getTtsVoice().then(setVoice); }, []);
   useEffect(() => {
     if (dash.data) {
       setLevel(dash.data.preferred_level);
@@ -184,11 +142,14 @@ export default function Me() {
       <Screen refreshing={access.isRefetching} onRefresh={() => { access.refetch(); dash.refetch(); }}>
         <Card kind="soft">
           <Row>
-            <View
-              style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: C.accentSoft, borderWidth: 2, borderColor: C.accent, alignItems: 'center', justifyContent: 'center' }}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Edit profile"
+              hitSlop={6}
+              onPress={() => router.push('/profile')}
             >
-              <T style={{ fontFamily: F.hand, fontSize: 24, color: C.accentInk }}>{name[0]?.toUpperCase() ?? 'M'}</T>
-            </View>
+              <Avatar avatarUrl={dash.data?.avatar_url} name={name} size={52} />
+            </Pressable>
             <Col gap={4} style={{ flex: 1 }}>
               <T v="handH3" numberOfLines={1}>{name}</T>
               <T v="mut" numberOfLines={1}>{email}</T>
@@ -208,19 +169,33 @@ export default function Me() {
         ) : null}
 
         <T v="label">Default teaching level</T>
-        <LevelToggle value={level} onChange={(v) => { setLevel(v); save.mutate({ preferred_level: v }); }} />
+        <Segmented
+          value={level}
+          options={LEVEL_OPTIONS}
+          onChange={(v) => { setLevel(v); save.mutate({ preferred_level: v }); }}
+        />
         <T v="mut">Used whenever you start a new lesson or test.</T>
 
         <T v="label">Appearance</T>
-        <ThemeSegmented />
+        <Segmented value={mode} options={THEME_OPTIONS} onChange={setMode} />
         <T v="mut">System follows your phone's light or dark setting.</T>
 
         <Card kind="soft" flat>
           <Row>
-            <Col gap={2} style={{ flex: 1 }}>
-              <T v="bodyB">Read aloud</T>
-              <T v="mut">A speaker button reads lessons out loud</T>
-            </Col>
+            <Pressable
+              style={{ flex: 1 }}
+              accessibilityRole="button"
+              accessibilityLabel="Read-aloud voice"
+              onPress={() => setVoiceOpen(true)}
+            >
+              <Col gap={2}>
+                <Row gap={6}>
+                  <T v="bodyB">Read aloud</T>
+                  <Ionicons name="chevron-forward" size={14} color={C.ink3} />
+                </Row>
+                <T v="mut">{voice ? `Voice: ${voice.name}` : 'Tap to choose a voice'}</T>
+              </Col>
+            </Pressable>
             <TtsToggle on={tts} onChange={(v) => { setTts(v); save.mutate({ tts_enabled: v }); }} />
           </Row>
         </Card>
@@ -235,7 +210,11 @@ export default function Me() {
           </Row>
         </Card>
 
-        <Pressable onPress={() => router.push('/(app)/me/plans')}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Subscription & plans"
+          onPress={() => router.push('/(app)/me/plans')}
+        >
           <Card kind="soft" flat>
             <Row>
               <Ionicons name="trophy-outline" size={18} color={C.ink2} />
@@ -251,6 +230,8 @@ export default function Me() {
         </Pressable>
 
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Study reminders"
           onPress={() => Alert.alert('Coming soon', 'Local study reminders land in the next update.')}
         >
           <Card kind="soft" flat>
@@ -263,7 +244,11 @@ export default function Me() {
           </Card>
         </Pressable>
 
-        <Pressable onPress={() => setSignOutOpen(true)}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Sign out"
+          onPress={() => setSignOutOpen(true)}
+        >
           <Card kind="soft" flat>
             <Row>
               <Ionicons name="log-out-outline" size={18} color={C.ink2} />
@@ -273,6 +258,8 @@ export default function Me() {
         </Pressable>
 
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Clear all my data"
           onPress={confirmClearData}
           disabled={clearData.isPending}
         >
@@ -286,7 +273,11 @@ export default function Me() {
           </Card>
         </Pressable>
 
-        <Pressable onPress={() => router.push('/(app)/me/delete')}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Delete account"
+          onPress={() => router.push('/(app)/me/delete')}
+        >
           {/* Blends with the other settings rows (same soft card surface),
               with a heavier ink border to mark it as a weightier action and
               a red icon + PERMANENT chip as the only color signals. */}
@@ -298,19 +289,7 @@ export default function Me() {
             <Row>
               <Ionicons name="person-remove-outline" size={18} color={C.err} />
               <T v="bodyB" style={{ flex: 1 }}>Delete account</T>
-              <View
-                style={{
-                  borderWidth: 1.5,
-                  borderColor: C.err,
-                  borderRadius: 6,
-                  paddingHorizontal: 7,
-                  paddingVertical: 2,
-                }}
-              >
-                <T style={{ fontSize: 10, fontWeight: '800', color: C.err, letterSpacing: 0.6 }}>
-                  PERMANENT
-                </T>
-              </View>
+              <Badge label="Permanent" kind="err" />
               <Ionicons name="chevron-forward" size={15} color={C.ink2} />
             </Row>
           </Card>
@@ -367,6 +346,13 @@ export default function Me() {
         confirmLabel="OK"
         onConfirm={() => setClearErrorOpen(null)}
         onCancel={() => setClearErrorOpen(null)}
+      />
+
+      <VoicePicker
+        visible={voiceOpen}
+        currentVoiceId={voice?.id ?? null}
+        onSelect={(v) => { setVoice(v); setTtsVoice(v); }}
+        onClose={() => setVoiceOpen(false)}
       />
     </View>
   );

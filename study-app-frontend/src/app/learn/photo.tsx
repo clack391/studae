@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { Alert, Image, View } from 'react-native';
+import { Alert, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
-import { Ionicons } from '@expo/vector-icons';
 import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Card, Row } from '@/components/ui/Card';
@@ -14,6 +13,7 @@ import { Sources } from '@/components/ui/Sources';
 import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { T } from '@/components/ui/T';
+import { PhotoPreview, ReadBackCard } from '@/components/domain/PhotoBox';
 import { api } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
 import { useTheme } from '@/lib/theme';
@@ -81,39 +81,14 @@ export default function PhotoProblem() {
     <View style={{ flex: 1, backgroundColor: C.paper }}>
       <AppBar back title="Photo problem" />
       <Screen>
-        {uri ? (
-          <Image
-            source={{ uri }}
-            style={{ width: '100%', height: 220, borderRadius: 12, borderWidth: 2, borderColor: C.line }}
-            resizeMode="cover"
-          />
-        ) : (
-          <View
-            style={{
-              height: 180, borderRadius: 12, borderWidth: 2, borderColor: C.line,
-              alignItems: 'center', justifyContent: 'center', backgroundColor: C.card2, gap: 8,
-            }}
-          >
-            <Ionicons name="image-outline" size={40} color={C.ink3} />
-            <T v="small">Snap or pick a photo of a problem</T>
-          </View>
-        )}
+        <PhotoPreview imageUri={uri} placeholder="Snap or pick a photo of a problem" />
         <Row gap={10}>
           <View style={{ flex: 1 }}><Button label="Take photo" kind="soft" block onPress={() => pick(true)} /></View>
           <View style={{ flex: 1 }}><Button label="From library" kind="soft" block onPress={() => pick(false)} /></View>
         </Row>
 
         {result?.read_back ? (
-          <Card kind="accent" flat>
-            <Row>
-              <Ionicons name="eye-outline" size={15} color={C.accent} />
-              <T v="bodyB">What we read from your photo</T>
-            </Row>
-            <View style={{ backgroundColor: C.card, borderWidth: 1.5, borderColor: C.line, borderRadius: 8, padding: 8 }}>
-              <T>{result.read_back}</T>
-            </View>
-            <T v="mut">Misread? Retake the photo before asking.</T>
-          </Card>
+          <ReadBackCard text={result.read_back} hint="Misread? Retake the photo before asking." />
         ) : null}
 
         <Field label="Question" value={question} onChangeText={setQuestion} placeholder="What do you want explained?" />

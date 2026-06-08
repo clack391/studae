@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { Loading } from '@/components/ui/Loading';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
@@ -29,6 +30,12 @@ export default function LessonHistory() {
   });
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard() });
   useFocusEffect(useCallback(() => { sessions.refetch(); }, [docId]));
+
+  // Destructive confirmations via the on-brand ConfirmSheet instead of the
+  // OS Material Alert. Each holds the target session id (and, for delete,
+  // its mode so the title reads "lesson" vs "conversation"); null = closed.
+  const [resetTarget, setResetTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; mode: 'teach' | 'ask' } | null>(null);
 
   const reset = useMutation({
     mutationFn: (sessionId: string) => api.lessonReset(sessionId),
@@ -54,25 +61,11 @@ export default function LessonHistory() {
   });
 
   function confirmReset(sessionId: string) {
-    Alert.alert(
-      'Restart this lesson?',
-      'Progress and saved transcript will be cleared. You can walk the topics again from the beginning.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Restart', style: 'destructive', onPress: () => reset.mutate(sessionId) },
-      ],
-    );
+    setResetTarget(sessionId);
   }
 
   function confirmDelete(sessionId: string, mode: 'teach' | 'ask') {
-    Alert.alert(
-      mode === 'teach' ? 'Delete this lesson?' : 'Delete this conversation?',
-      'The transcript will be removed. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => del.mutate(sessionId) },
-      ],
-    );
+    setDeleteTarget({ id: sessionId, mode });
   }
 
   const list = sessions.data?.sessions ?? [];
@@ -97,6 +90,11 @@ export default function LessonHistory() {
             // screen rehydrates the conversation from messages).
             <Pressable
               key={s.id}
+              accessibilityRole="button"
+              accessibilityLabel={
+                `${isTeach ? 'Lesson' : 'Conversation'}: ${s.title ?? (isTeach ? 'Lesson' : 'Conversation')}, ` +
+                `${cap(s.level)} level. ${isTeach ? 'Open transcript' : 'Continue conversation'}.`
+              }
               onPress={() => {
                 if (isTeach) {
                   router.push({ pathname: '/transcript/[sid]', params: { sid: s.id, docId: s.document_id } });
@@ -133,6 +131,8 @@ export default function LessonHistory() {
                       hitSlop={10}
                       style={{ padding: 4 }}
                       disabled={reset.isPending}
+                      accessibilityRole="button"
+                      accessibilityLabel="Restart this lesson"
                     >
                       <Ionicons name="refresh-outline" size={18} color={C.ink2} />
                     </Pressable>
@@ -142,6 +142,8 @@ export default function LessonHistory() {
                     hitSlop={10}
                     style={{ padding: 4 }}
                     disabled={del.isPending}
+                    accessibilityRole="button"
+                    accessibilityLabel={isTeach ? 'Delete this lesson' : 'Delete this conversation'}
                   >
                     <Ionicons name="trash-outline" size={18} color={C.ink2} />
                   </Pressable>
@@ -163,6 +165,26 @@ export default function LessonHistory() {
           </Card>
         ) : null}
       </Screen>
+
+      <ConfirmSheet
+        visible={resetTarget !== null}
+        tone="danger"
+        title="Restart this lesson?"
+        message="Progress and saved transcript will be cleared. You can walk the topics again from the beginning."
+        confirmLabel="Restart"
+        onConfirm={() => { if (resetTarget) reset.mutate(resetTarget); }}
+        onCancel={() => setResetTarget(null)}
+      />
+
+      <ConfirmSheet
+        visible={deleteTarget !== null}
+        tone="danger"
+        title={deleteTarget?.mode === 'ask' ? 'Delete this conversation?' : 'Delete this lesson?'}
+        message="The transcript will be removed. This cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget.id); }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </View>
   );
 }

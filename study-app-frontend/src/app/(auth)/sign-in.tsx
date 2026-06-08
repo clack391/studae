@@ -26,17 +26,7 @@ export default function SignIn() {
     <Screen safeTop>
       <View style={{ height: 26 }} />
       <View style={{ alignItems: 'center', overflow: 'visible' }}>
-        <T
-          style={{
-            fontFamily: F.hand,
-            fontSize: 34,
-            lineHeight: 48,
-            paddingBottom: 4,
-            color: C.ink,
-            letterSpacing: 0.3,
-            textAlign: 'center',
-          }}
-        >
+        <T v="handBig" style={{ textAlign: 'center' }}>
           Studae<T style={{ fontFamily: F.hand, color: C.accent }}>.</T>
         </T>
         <T>Learn anything from your own material.</T>

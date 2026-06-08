@@ -72,6 +72,8 @@ export default function ExamsHome() {
               key={fa.id}
               onPressIn={() => prefetchFocus(fa.id)}
               onPress={() => router.push({ pathname: '/(app)/exams/focus/[id]', params: { id: fa.id } })}
+              accessibilityRole="button"
+              accessibilityLabel={`${fa.name}, ${fa.document_title}`}
             >
               <Card kind="soft">
                 <Row top>

@@ -22,7 +22,7 @@ export function Sources({ items }: { items: Source[] }) {
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <Ionicons name="document-text-outline" size={13} color={C.accentInk} />
-        <T style={{ fontFamily: F.note, fontSize: 12.5, color: C.accentInk, fontWeight: '700' }}>from your material</T>
+        <T v="small" style={{ fontFamily: F.note, color: C.accentInk, fontWeight: '700' }}>from your material</T>
       </View>
       {items.map((s, i) => (
         <View
@@ -40,8 +40,8 @@ export function Sources({ items }: { items: Source[] }) {
         >
           <Ionicons name="document-text-outline" size={13} color={C.accent} style={{ marginTop: 1 }} />
           <View style={{ flex: 1 }}>
-            <T style={{ fontSize: 11.5, fontWeight: '800', color: C.accentInk, letterSpacing: 0.2 }}>page {s.page_number ?? '?'}</T>
-            {s.snippet ? <T style={{ fontSize: 11, color: C.ink, lineHeight: 15, fontWeight: '500' }} numberOfLines={3}>{s.snippet}</T> : null}
+            <T v="mut" style={{ fontWeight: '800', color: C.accentInk, letterSpacing: 0.2 }}>page {s.page_number ?? '?'}</T>
+            {s.snippet ? <T v="small" style={{ color: C.ink }} numberOfLines={3}>{s.snippet}</T> : null}
           </View>
         </View>
       ))}

@@ -8,6 +8,7 @@ import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Bar } from '@/components/ui/Bar';
 import { Button } from '@/components/ui/Button';
+import { Chip } from '@/components/ui/Segmented';
 import { T } from '@/components/ui/T';
 import { MD } from '@/components/ui/MD';
 import { Sources } from '@/components/ui/Sources';
@@ -116,9 +117,7 @@ export default function Teach() {
       />
       <Row between style={{ paddingHorizontal: 16, paddingBottom: 4 }}>
         <T v="bodyB">{data?.progress ? `Topic ${cur} of ${total}` : next.isPending ? 'Loading…' : ''}</T>
-        <View style={{ alignSelf: 'flex-end', backgroundColor: C.accentSoft, borderColor: C.accent, borderWidth: 1.6, borderRadius: 20, paddingVertical: 4, paddingHorizontal: 11 }}>
-          <T style={{ color: C.accentInk, fontWeight: '700', fontSize: 13 }}>Lesson</T>
-        </View>
+        <Chip label="Lesson" on />
       </Row>
       <View style={{ paddingHorizontal: 16, marginTop: 4 }}>
         {next.isPending && !data ? <IndeterminateBar /> : <Bar pct={pct} />}

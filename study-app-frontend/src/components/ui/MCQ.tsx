@@ -17,10 +17,13 @@ export function MCQ({ letter, text, selected, state, onPress }: {
   let bubbleColor = C.ink2;
   if (state === 'correct') { border = C.ok; bg = C.okSoft; bubbleBg = C.ok; bubbleBorder = C.ok; bubbleColor = '#fff'; }
   else if (state === 'wrong') { border = C.err; bg = C.errSoft; bubbleBg = C.err; bubbleBorder = C.err; bubbleColor = '#fff'; }
-  else if (selected) { border = C.accent; bg = C.accentSoft; bubbleBg = C.accent; bubbleBorder = C.accent; bubbleColor = '#fff'; }
+  else if (selected) { border = C.accent; bg = C.accentSoft; bubbleBg = C.accentD; bubbleBorder = C.accent; bubbleColor = '#fff'; }
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ selected: !!selected }}
+      accessibilityLabel={letter + '. ' + text}
       style={{
         flexDirection: 'row',
         alignItems: 'center',

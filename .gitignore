@@ -1,4 +1,6 @@
 # Secrets — must never be committed
+/.env
+/.env.*
 study-app-backend/.env
 study-app-backend/.env.*
 !study-app-backend/.env.example
@@ -26,3 +28,4 @@ study-app-backend/data/
 *.log
 .vscode/
 .idea/
+.gstack/

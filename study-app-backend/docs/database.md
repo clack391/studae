@@ -96,6 +96,8 @@ One row per uploaded study document.
 | `source_type` | `text` |  Nullable |
 | `status` | `text` |  Nullable |
 | `outline` | `text` |  Nullable |
+| `ingest_cursor` | `int4` |  Nullable |
+| `chapter` | `text` |  Nullable |
 | `created_at` | `timestamptz` |  Nullable |
 | `progress` | `text` |  Nullable |
 
@@ -108,6 +110,8 @@ One row per uploaded study document.
 - `status` = `'processing'` (flips to `'ready'` or `'failed'`)
 - `progress` is `null` until ingestion starts; gets populated with strings like `'embedding chunk 10 of 34'` while processing, cleared back to `null` on success, left in place on failure (so the failure point stays visible).
 - `subject` is unused today — declared in the build plan but never populated by `/upload`.
+- `ingest_cursor` is the last fully-completed 1-indexed page during ingest (null at start); a resumed/retried ingest skips pages `<= ingest_cursor`.
+- `chapter` is the raw chapter label the user typed (e.g. `"5"`, `"V"`, `"Chapter 5"`) when ingest was restricted to one chapter of a PDF, else null (whole document). Persisted by `ingest_document` so a Retry (`POST /documents/{id}/reprocess`) re-runs ingest with the SAME chapter scope. Without it the retry would fall back to the whole-book path and, combined with `ingest_cursor` resume, ingest the wrong pages.
 
 ### RLS
 

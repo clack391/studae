@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -7,9 +7,12 @@ import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row, Divider } from '@/components/ui/Card';
 import { Bar } from '@/components/ui/Bar';
+import { Button } from '@/components/ui/Button';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
 import { DocThumb } from '@/components/domain/DocThumb';
 import { api } from '@/lib/api';
+import type { DocumentDetail } from '@/lib/types';
 import { useTheme } from '@/lib/theme';
 const STAGES = [
   { key: 'extract', label: 'Extracting text', tokens: ['extract', 'reading', 'ocr'] },
@@ -22,6 +25,7 @@ export default function Ingest() {
   const router = useRouter();
   const qc = useQueryClient();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const [delOpen, setDelOpen] = useState(false);
   const doc = useQuery({
     queryKey: ['doc', id],
     queryFn: () => api.getDocument(id!),
@@ -56,15 +60,23 @@ export default function Ingest() {
     onError: (e: any) => Alert.alert('Could not delete', e?.message ?? ''),
   });
 
+  // Re-run ingestion from the stored source files. The backend resumes from
+  // the existing cursor and flips status back to "processing"; seeding the
+  // cache with that status makes the existing refetchInterval start polling
+  // again immediately without waiting for the next manual fetch.
+  const retry = useMutation({
+    mutationFn: () => api.reprocessDocument(id!),
+    onSuccess: (r) => {
+      qc.setQueryData<DocumentDetail>(['doc', id], (prev) =>
+        prev ? { ...prev, status: r.status } : prev,
+      );
+      doc.refetch();
+    },
+    onError: (e: any) => Alert.alert('Could not retry', e?.message ?? ''),
+  });
+
   function confirmDelete() {
-    Alert.alert(
-      'Delete this document?',
-      'It will be removed from your library and from storage. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => del.mutate() },
-      ],
-    );
+    setDelOpen(true);
   }
 
   const d = doc.data;
@@ -80,7 +92,13 @@ export default function Ingest() {
         back
         title="Processing"
         right={
-          <Pressable onPress={confirmDelete} hitSlop={10} disabled={del.isPending}>
+          <Pressable
+            onPress={confirmDelete}
+            hitSlop={10}
+            disabled={del.isPending}
+            accessibilityRole="button"
+            accessibilityLabel="Delete document"
+          >
             <Ionicons name="trash-outline" size={20} color={C.ink} />
           </Pressable>
         }
@@ -109,7 +127,7 @@ export default function Ingest() {
                     width: 22, height: 22, borderRadius: 11,
                     borderWidth: 2, borderStyle: state === 'wait' ? 'dashed' : 'solid',
                     borderColor: state === 'wait' ? C.line : C.accent,
-                    backgroundColor: state === 'done' ? C.accent : 'transparent',
+                    backgroundColor: state === 'done' ? C.accentD : 'transparent',
                     alignItems: 'center', justifyContent: 'center',
                   }}
                 >
@@ -130,9 +148,27 @@ export default function Ingest() {
                 Ingestion failed: {d.progress ?? 'unknown reason'}.
               </T>
             </Row>
+            <T v="mut">Retry picks up where it left off — it won't reprocess pages that already succeeded.</T>
+            <Button
+              label={retry.isPending ? 'Retrying…' : 'Retry'}
+              kind="pri"
+              block
+              leftIcon={<Ionicons name="refresh" size={18} color="#fff" />}
+              disabled={retry.isPending}
+              onPress={() => retry.mutate()}
+            />
           </Card>
         ) : null}
       </Screen>
+      <ConfirmSheet
+        visible={delOpen}
+        tone="danger"
+        title="Delete this document?"
+        message="It will be removed from your library and from storage. This cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => { setDelOpen(false); del.mutate(); }}
+        onCancel={() => setDelOpen(false)}
+      />
     </View>
   );
 }

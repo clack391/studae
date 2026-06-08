@@ -35,6 +35,10 @@ export interface DashboardAssessment {
 
 export interface Dashboard {
   name: string | null;
+  phone?: string | null;
+  // Storage KEY in the private "uploads" bucket ({user_id}/avatar.jpg), set
+  // by POST /me/avatar. Resolve via api.signedUrl(avatar_url) before render.
+  avatar_url?: string | null;
   plan: string | null;
   trial_ends_at: string | null;
   preferred_level: Level;
@@ -392,6 +396,11 @@ export interface MessagesResponse {
 export interface SettingsBody {
   preferred_level?: Level;
   tts_enabled?: boolean;
+  // "Username" maps to the users.name display-name field. phone is a
+  // free-text profile field. Both go through the existing POST /settings,
+  // which patches any non-null field.
+  name?: string;
+  phone?: string;
 }
 
 export interface SettingsResponse {

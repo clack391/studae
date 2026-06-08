@@ -13,7 +13,7 @@ export function Badge({ label, kind = 'plain' }: { label: string; kind?: Kind })
   else if (kind === 'warn') { s.backgroundColor = C.warnSoft; color = C.warn; }
   else if (kind === 'err') { s.backgroundColor = C.errSoft; color = C.err; }
   else if (kind === 'out') { s.backgroundColor = 'transparent'; s.borderWidth = 1.5; s.borderColor = C.line; color = C.ink2; }
-  else if (kind === 'exam') { s.backgroundColor = C.accent; color = '#fff'; }
+  else if (kind === 'exam') { s.backgroundColor = C.accentD; s.borderWidth = 2; s.borderColor = C.ink; color = '#fff'; }
   return (
     <View style={s}>
       <T style={{ color, fontSize: 10, fontWeight: '800', letterSpacing: 0.5, textTransform: 'uppercase', lineHeight: 12 }}>{label}</T>

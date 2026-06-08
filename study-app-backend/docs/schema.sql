@@ -42,11 +42,27 @@ create table if not exists public.users (
   trial_ends_at timestamptz default (now() + interval '7 days'),
   preferred_level text default 'novice',
   tts_enabled boolean default false,
+  -- avatar_url is a storage KEY in the private "uploads" bucket
+  -- ({user_id}/avatar.jpg), set by POST /me/avatar; the frontend signs it
+  -- via GET /files/signed-url to render. phone is a free-text profile field.
+  avatar_url text,
+  phone text,
   subscription_ends_at timestamptz,
   created_at timestamptz default now()
 );
 
 -- documents — one row per uploaded PDF / image.
+--
+-- ingest_cursor is the last fully-completed 1-indexed page during ingest
+-- (null before/at the start). The ingest pipeline writes chunks page by
+-- page and bumps this after each page, so an interrupted ingest resumes
+-- from cursor+1 instead of re-doing the whole document.
+--
+-- chapter is the raw chapter label the user typed at upload time (e.g. "5",
+-- "V", "Chapter 5") when ingest was restricted to one chapter of a PDF, else
+-- null (whole document). It is persisted so a Retry (POST /reprocess) re-runs
+-- ingest with the SAME chapter scope; without it a retry would re-ingest the
+-- whole book (and, combined with ingest_cursor resume, the wrong pages).
 create table if not exists public.documents (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -57,8 +73,14 @@ create table if not exists public.documents (
   status text default 'processing',
   outline text,
   progress text,
+  ingest_cursor int,
+  chapter text,
   created_at timestamptz default now()
 );
+-- Idempotent add for databases created before these columns existed
+-- (create table if not exists above won't add them to an existing table).
+alter table public.documents add column if not exists ingest_cursor int;
+alter table public.documents add column if not exists chapter text;
 create index if not exists documents_user_id_idx on public.documents(user_id);
 
 -- chunks — embedded passages of every document.

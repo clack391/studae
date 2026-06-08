@@ -70,7 +70,7 @@ export default function ReviewCards() {
       <View style={{ flex: 1, backgroundColor: C.paper }}>
         <AppBar back title="Review" />
         <Screen>
-          <View style={{ alignItems: 'center', marginTop: 30, gap: 8 }}>
+          <View style={{ alignItems: 'center', marginTop: 24, gap: 8 }}>
             <Ionicons name="checkmark-circle" size={48} color={C.ok} />
             <T v="handH2">No cards due</T>
             <T v="small" style={{ textAlign: 'center' }}>Come back when more cards are scheduled for review.</T>
@@ -86,7 +86,7 @@ export default function ReviewCards() {
       <View style={{ flex: 1, backgroundColor: C.paper }}>
         <AppBar back title="Review" />
         <Screen>
-          <View style={{ alignItems: 'center', marginTop: 30, gap: 8 }}>
+          <View style={{ alignItems: 'center', marginTop: 24, gap: 8 }}>
             <Ionicons name="trophy-outline" size={48} color={C.accent} />
             <T v="handH2">All caught up!</T>
             <T v="small" style={{ textAlign: 'center' }}>

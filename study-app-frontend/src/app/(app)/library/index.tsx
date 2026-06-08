@@ -81,6 +81,8 @@ export default function Library() {
           return (
             <Pressable
               key={d.id}
+              accessibilityRole="button"
+              accessibilityLabel={`${d.title}, ${meta}`}
               onPressIn={() => ready && prefetchDoc(d.id)}
               onPress={() => tap && router.push(tap)}
             >

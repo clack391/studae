@@ -13,7 +13,7 @@ export function MeBubble({ text }: { text: string }) {
     <View
       style={{
         alignSelf: 'flex-end',
-        backgroundColor: C.accent,
+        backgroundColor: C.accentD,
         paddingVertical: 10,
         paddingHorizontal: 12,
         borderRadius: 15,
