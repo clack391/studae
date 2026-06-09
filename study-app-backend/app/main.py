@@ -742,6 +742,15 @@ def history_detail(assessment_id: str, user_id: str = Depends(get_user_id)):
             "dispute_reason": x.get("dispute_reason"),
         })
 
+    # Vision-filter each result's figures against the question they
+    # were attached to. Drops blank / off-topic figures so the review
+    # screen never shows empty cards under a question. Same pass also
+    # runs the first time a test is graded via assess.grade_assessment;
+    # this is the re-open-from-history path, which builds results
+    # inline rather than going through _results_from_saved, so the
+    # filter needs to be called here explicitly.
+    assess._haiku_vision_filter_review_figures(results)
+
     results, release_at = assess.hide_exam_answers_if_locked(a[0], results)
     response = {"assessment": a[0], "results": results}
     if release_at:

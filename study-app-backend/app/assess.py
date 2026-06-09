@@ -710,6 +710,141 @@ def _haiku_vision_figure_matches(q: dict, figure_chunks: list) -> bool:
     return False
 
 
+def _haiku_vision_filter_review_figures(results: list[dict]) -> None:
+    """Vision-filter review-time figures against the questions they
+    were attached to. Mutates `results` in place: for each source
+    carrying a `figure_path`, Haiku looks at the actual image and
+    decides if it matches the question. Mismatched figures get
+    `figure_path` cleared so the chat UI no longer renders an empty
+    or off-topic card. Text snippets stay — the citation still works.
+
+    Runs as ONE batched Haiku 4.5 Vision call across every figure in
+    the assessment, capped at 12 images so cost and latency stay
+    bounded on large tests.
+
+    Failure modes (download error, vision call error, malformed
+    JSON) all fall back to keeping everything so a flaky filter
+    can't silently strip legitimate review figures.
+    """
+    import base64
+
+    # Lazy import — `chat` imports `clients` which imports `STYLE_RULES`,
+    # and assess already pulls from chat in `_regenerate_text_only_question`.
+    # Importing at function scope avoids any top-level circular surprises.
+    from .chat import _sniff_image_bytes, _extract_json_obj
+
+    # Collect every (result_idx, source_idx, figure_path) we might check.
+    items: list[dict] = []
+    for ri, r in enumerate(results):
+        for si, s in enumerate(r.get("sources") or []):
+            if s.get("figure_path"):
+                items.append({
+                    "ri": ri,
+                    "si": si,
+                    "fp": s["figure_path"],
+                    "question": r.get("question") or "",
+                    "ref_answer": r.get("reference_answer") or "",
+                })
+
+    if not items:
+        return
+
+    MAX_FIGURES = 12
+    items = items[:MAX_FIGURES]
+
+    content: list[dict] = []
+    # (haiku_image_index_in_content, items_list_idx)
+    indexed: list[tuple[int, int]] = []
+    for k, it in enumerate(items):
+        try:
+            img_bytes = supabase.storage.from_("uploads").download(it["fp"])
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            media_type = _sniff_image_bytes(img_bytes) or "image/jpeg"
+        except Exception as e:
+            log.warning(
+                "review figure filter: download failed for %s: %s: %s",
+                it["fp"], type(e).__name__, e,
+            )
+            continue
+        indexed.append((len(content), k))
+        content.append({
+            "type": "image",
+            "source": {"type": "base64",
+                       "media_type": media_type,
+                       "data": b64},
+        })
+
+    if not indexed:
+        return
+
+    # Build the per-image question context. Each line names the image
+    # index Haiku will see and the question it was attached to.
+    items_block_lines = []
+    for haiku_idx, k in indexed:
+        line = f"- Index {haiku_idx}: question = \"{items[k]['question']}\""
+        if items[k]["ref_answer"]:
+            line += f". Correct answer = \"{items[k]['ref_answer']}\""
+        items_block_lines.append(line)
+    items_block = "\n".join(items_block_lines)
+
+    prompt = (
+        "You are filtering figures shown during test review. The "
+        f"{len(indexed)} image(s) attached above were retrieved as "
+        "visual context for these review questions, in the same "
+        "order:\n\n"
+        f"{items_block}\n\n"
+        "For EACH image (referred to by its integer index), decide "
+        "whether the figure plausibly depicts, illustrates, or "
+        "visually relates to the question it was attached to. Be "
+        "LENIENT: keep a figure when it shows the relevant subject "
+        "matter even if it doesn't match the question word-for-word. "
+        "DROP a figure ONLY when it is clearly off-topic: a blank "
+        "or near-white page, an unrelated cover graphic, a title / "
+        "section header page, a page with no useful visual content, "
+        "or an image whose subject matter has nothing to do with "
+        "the question.\n\n"
+        "Return ONLY a JSON object with the integer indices to "
+        "KEEP, like: {\"keep\": [0, 2]}. Empty list is fine — "
+        "drop everything if no figure is useful."
+    )
+    content.append({"type": "text", "text": prompt})
+
+    try:
+        raw = track_claude(
+            "review_figure_filter",
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{"role": "user", "content": content}],
+        ).content[0].text
+        decision = _extract_json_obj(raw)
+        keep_raw = decision.get("keep") if isinstance(decision, dict) else None
+        if not isinstance(keep_raw, list):
+            log.warning("review figure filter: malformed JSON, keeping all")
+            return
+        keep_set = {
+            int(k) for k in keep_raw if isinstance(k, (int, float))
+        }
+        dropped = 0
+        for haiku_idx, k in indexed:
+            if haiku_idx in keep_set:
+                continue
+            it = items[k]
+            ri, si = it["ri"], it["si"]
+            srcs = results[ri].get("sources") or []
+            if 0 <= si < len(srcs):
+                srcs[si]["figure_path"] = None
+                dropped += 1
+        log.info(
+            "review figure filter: kept %d, dropped %d (of %d checked)",
+            len(indexed) - dropped, dropped, len(indexed),
+        )
+    except Exception as e:
+        log.warning(
+            "review figure filter call failed: %s: %s",
+            type(e).__name__, e,
+        )
+
+
 def _regenerate_text_only_question(original, source, fmt, level, kind, topic):
     """Ask Sonnet to replace a figure-dependent question with a text-only
     one on the same topic. Returns the new question dict on success, or
@@ -1289,6 +1424,11 @@ def _results_from_saved(questions, answers, suppress_figures=False):
             "dispute_reason": a.get("dispute_reason"),
         })
         awarded += float(a.get("score_awarded") or 0)
+    # Vision-filter each surviving figure against the question it was
+    # attached to. Drops empty / off-topic figures that slipped through
+    # the test-create pass (e.g. a question with multiple source chunks
+    # where only one chunk's figure actually depicts the question).
+    _haiku_vision_filter_review_figures(results)
     return {"score": awarded, "total": total, "results": results}
 
 
@@ -1360,6 +1500,13 @@ def grade_assessment(user_id, assessment_id):
             "disputed": False,
             "dispute_reason": None,
         })
+
+    # Vision-filter each result's figures against the question they
+    # were attached to. Drops empty / off-topic figures so the review
+    # screen never shows blank cards or unrelated diagrams under a
+    # question. Same pass also runs on every re-open via
+    # _results_from_saved.
+    _haiku_vision_filter_review_figures(results)
 
     submitted_at = now_iso()
     supabase.table("assessments").update({

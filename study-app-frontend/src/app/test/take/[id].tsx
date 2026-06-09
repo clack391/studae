@@ -87,6 +87,52 @@ export default function Take() {
   function setAnswer(text: string) {
     if (!q) return;
     setAnswers((a) => ({ ...a, [q.id]: text }));
+    // For objective questions, fire the save right now. The debounced
+    // useEffect above waits 500 ms before saving, and its cleanup is
+    // triggered when `q.id` changes — so a student who taps an MCQ
+    // option and quickly hits Next has their selection silently
+    // cancelled and the review screen shows "no answer". MCQ taps are
+    // discrete picks, not rapid keystrokes, so there's nothing to
+    // debounce — save instantly. Theory typing still goes through the
+    // debounced effect so we don't spam the API per keystroke.
+    if (isObjective) {
+      save.mutate({ question_id: q.id, student_answer: text });
+    }
+  }
+
+  // Flush the current question's answer to the backend BEFORE
+  // navigating away or submitting. The debounced useEffect schedules
+  // its save 500 ms after the answer changes; when `q.id` changes
+  // (Next / Prev / question-grid tap) the effect's cleanup fires and
+  // clearTimeout cancels the pending save. Calling save.mutate (or
+  // mutateAsync for the submit path) here guarantees the latest typed
+  // value reaches the server. The endpoint uses an upsert on
+  // (assessment_id, question_id) so a double-save is harmless.
+  function flushCurrent() {
+    if (!q) return;
+    const v = answers[q.id];
+    if (v == null) return;
+    save.mutate({ question_id: q.id, student_answer: v });
+  }
+
+  function goTo(nextIdx: number) {
+    flushCurrent();
+    setIdx(nextIdx);
+  }
+
+  async function flushAndSubmit() {
+    if (q) {
+      const v = answers[q.id];
+      if (v != null) {
+        try {
+          await save.mutateAsync({ question_id: q.id, student_answer: v });
+        } catch {
+          // Don't block submit on a flush failure — the saved-so-far
+          // state still goes through and the user sees their score.
+        }
+      }
+    }
+    submit.mutate();
   }
 
   return (
@@ -126,7 +172,7 @@ export default function Take() {
           return (
             <Pressable
               key={qq.id}
-              onPress={() => setIdx(i)}
+              onPress={() => goTo(i)}
               hitSlop={10}
               accessibilityRole="button"
               accessibilityLabel={'Question ' + (i + 1) + (answered ? ', answered' : '')}
@@ -197,10 +243,10 @@ export default function Take() {
         )}
       </Screen>
       <Row style={{ padding: 12, borderTopWidth: 2, borderColor: C.ink, backgroundColor: C.card }} gap={10}>
-        <Button label="← Prev" kind="soft" onPress={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} />
+        <Button label="← Prev" kind="soft" onPress={() => goTo(Math.max(0, idx - 1))} disabled={idx === 0} />
         {idx < total - 1 ? (
           <View style={{ flex: 1 }}>
-            <Button label="Next →" kind="pri" block onPress={() => setIdx((i) => Math.min(total - 1, i + 1))} />
+            <Button label="Next →" kind="pri" block onPress={() => goTo(Math.min(total - 1, idx + 1))} />
           </View>
         ) : (
           <View style={{ flex: 1 }}>
@@ -208,7 +254,7 @@ export default function Take() {
               label={submit.isPending ? 'Submitting…' : 'Submit test'}
               kind="dark"
               block
-              onPress={() => submit.mutate()}
+              onPress={() => flushAndSubmit()}
               disabled={submit.isPending}
             />
           </View>
