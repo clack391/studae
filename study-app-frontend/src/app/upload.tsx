@@ -13,7 +13,7 @@ import { Field } from '@/components/ui/Field';
 import { Button } from '@/components/ui/Button';
 import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, uploadWithRetry } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
 import { useTheme } from '@/lib/theme';
 function PickRow({ icon, title, sub, onPress, busy }: { icon: keyof typeof Ionicons.glyphMap; title: string; sub: string; onPress: () => void; busy?: boolean }) {
@@ -233,28 +233,8 @@ export default function Upload() {
   // React Native's fetch + FormData on Android is flaky on slow LTE —
   // the upload can drop mid-transfer with a bare "Network request failed"
   // even though the connection is otherwise fine (other API calls work).
-  // Wrap the upload in a small retry: real client/server errors (4xx, 5xx
-  // from the backend) come through as ApiError and bypass retry; only
-  // bare fetch failures get a second and third try, with brief backoff.
-  async function uploadWithRetry(form: FormData) {
-    const MAX_TRIES = 3;
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
-      try {
-        return await api.uploadDocument(form);
-      } catch (e) {
-        lastErr = e;
-        // The backend answered — don't retry. Real errors deserve real
-        // handling (limit hit, file too large, validation failure).
-        if (e instanceof ApiError) throw e;
-        if (attempt < MAX_TRIES) {
-          // 400ms, then 1200ms. Total worst-case extra wait ~1.6 s.
-          await new Promise((r) => setTimeout(r, 400 * attempt * attempt));
-        }
-      }
-    }
-    throw lastErr;
-  }
+  // The shared `uploadWithRetry` helper in lib/api handles this for
+  // every multipart upload in the app — see its JSDoc for the policy.
 
   // Pick a single document file. Accepts PDF plus office/text formats
   // (.docx, .pptx, .txt, .md). The backend routes by extension: a single
@@ -319,7 +299,7 @@ export default function Upload() {
       if (trimmed) form.append('chapter', trimmed);
       setMaterialName(cleanFilename(file.name) || 'document');
       setUploading(true);
-      const up = await uploadWithRetry(form);
+      const up = await uploadWithRetry(() => api.uploadDocument(form));
       bustDocListCaches();
       // Hand off to the polling overlay. The user stays on this screen
       // with the "Processing" view until ingest finishes, then the poll
@@ -393,7 +373,7 @@ export default function Upload() {
           : cleanFilename(first.fileName) || (fromCamera ? 'camera photo' : 'photo'),
       );
       setUploading(true);
-      const up = await uploadWithRetry(form);
+      const up = await uploadWithRetry(() => api.uploadDocument(form));
       bustDocListCaches();
       // Hand off to the polling overlay so the user stays on this screen
       // through ingest instead of bouncing to Home and back.

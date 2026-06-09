@@ -11,7 +11,7 @@ import { Field } from '@/components/ui/Field';
 import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { PhotoPreview, ReadBackCard } from '@/components/domain/PhotoBox';
-import { api } from '@/lib/api';
+import { api, uploadWithRetry } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
 import { useTheme } from '@/lib/theme';
 import type { AskPhotoResponse, Level } from '@/lib/types';
@@ -63,7 +63,10 @@ export default function PhotoProblem() {
       // present, falls back to a generic "solve and explain" if blank.
       form.append('question', question);
       form.append('file', { uri, name: 'problem.jpg', type: 'image/jpeg' } as any);
-      const res = await api.askPhoto(form);
+      // Retry bare fetch failures (e.g. RN's "Network request failed"
+      // mid-transfer on flaky LTE) per the shared lib/api policy.
+      // Real backend errors come through as ApiError and bypass retry.
+      const res = await uploadWithRetry(() => api.askPhoto(form));
       // Pass the final sid back through the mutation result so
       // onSuccess can navigate to the chat thread for this session,
       // even when ensureSession created it mid-mutation (the React

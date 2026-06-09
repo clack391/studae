@@ -8,7 +8,7 @@ import { Row } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { T } from '@/components/ui/T';
 import { PhotoPreview, ReadBackCard } from '@/components/domain/PhotoBox';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, uploadWithRetry } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
 export default function PhotoAnswer() {
   const C = useTheme();
@@ -40,7 +40,11 @@ export default function PhotoAnswer() {
       form.append('assessment_id', id);
       form.append('question_id', qid);
       form.append('file', { uri, name: 'answer.jpg', type: 'image/jpeg' } as any);
-      const r = await api.answerSavePhoto(form);
+      // Retry bare fetch failures (e.g. dropped multipart on flaky
+      // LTE) per the shared lib/api policy. Real backend errors
+      // (including the 410 auto-submit) come through as ApiError and
+      // bypass retry so the catch below handles them normally.
+      const r = await uploadWithRetry(() => api.answerSavePhoto(form));
       setReadBack(r.read_back ?? null);
     } catch (e: any) {
       if (e instanceof ApiError && e.status === 410) {

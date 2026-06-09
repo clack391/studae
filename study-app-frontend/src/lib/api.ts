@@ -136,6 +136,37 @@ const PATCH = <T>(path: string, body?: unknown) => request<T>('PATCH', path, { b
 const DELETE = <T>(path: string) => request<T>('DELETE', path);
 const UPLOAD = <T>(path: string, form: FormData) => request<T>('POST', path, { form });
 
+/**
+ * Retry an upload-style network call up to 3 times against bare
+ * fetch failures, e.g. React Native's "Network request failed" that
+ * sometimes drops a multipart POST mid-transfer on flaky LTE (Android
+ * in particular). Real backend errors (4xx, 5xx) surface as ApiError
+ * and bypass retry — they're the server's verdict and deserve real
+ * handling (limit hit, file too large, validation failure, 402).
+ *
+ * Backoff is 400 ms after attempt 1, 1200 ms after attempt 2 — total
+ * worst-case extra wait ~1.6 s before failing for real. Wrap any
+ * multipart upload (`api.uploadDocument`, `api.askPhoto`,
+ * `api.answerSavePhoto`, `api.uploadAvatar`) so the typical "good
+ * connection, dropped packet" hiccup is invisible to the user.
+ */
+export async function uploadWithRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const MAX_TRIES = 3;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (e instanceof ApiError) throw e;
+      if (attempt < MAX_TRIES) {
+        await new Promise((r) => setTimeout(r, 400 * attempt * attempt));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 /* Typed, intention-revealing wrappers — one per endpoint. Each comment links
    to the backend handler so future-me knows where the truth lives. */
 export const api = {

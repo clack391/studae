@@ -11,7 +11,7 @@ import { Field } from '@/components/ui/Field';
 import { Button } from '@/components/ui/Button';
 import { T } from '@/components/ui/T';
 import { Avatar } from '@/components/domain/Avatar';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, uploadWithRetry } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/lib/theme';
@@ -86,7 +86,11 @@ export default function Profile() {
         type: asset.mimeType ?? 'image/jpeg',
       } as any);
       setUploading(true);
-      await api.uploadAvatar(form);
+      // Retry bare fetch failures (e.g. RN's "Network request failed"
+      // mid-transfer on flaky LTE) per the shared lib/api policy.
+      // Real backend errors come through as ApiError and bypass retry,
+      // so the 413 / generic error branches below still handle them.
+      await uploadWithRetry(() => api.uploadAvatar(form));
       await qc.invalidateQueries({ queryKey: ['dashboard'] });
     } catch (e: any) {
       if (e instanceof ApiError && e.status === 413) {
