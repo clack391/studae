@@ -94,10 +94,20 @@ create table if not exists public.chunks (
   page_number int,
   content_type text default 'text',
   figure_path text,
+  -- Cached Haiku Vision verdict for the chunk's figure: TRUE if the
+  -- figure is essentially blank / contentless (near-white page, empty
+  -- worksheet sheet, no diagram or illustration), FALSE if it has
+  -- visible content, NULL until the first lesson load on this doc has
+  -- vision-checked it. Drives `_drop_blank_figures` in chat.py so
+  -- blank-page figures stop rendering under lessons after the first
+  -- check. One Haiku Vision call per chunk in the doc's lifetime.
+  figure_is_blank boolean,
   created_at timestamptz default now()
 );
 create index if not exists chunks_doc_idx on public.chunks(document_id);
 create index if not exists chunks_user_idx on public.chunks(user_id);
+-- One-shot to bring an existing deployment up to date:
+--   alter table public.chunks add column if not exists figure_is_blank boolean;
 -- Add this when you cross ~500 users for faster vector search:
 --   create index on public.chunks using hnsw (embedding vector_cosine_ops);
 
