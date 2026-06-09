@@ -395,6 +395,47 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
         visual_hi = max(1, num * 30 // 100)
         figure_guidance_extra = ""
 
+    # Type-specific rules and the JSON shape example MUST match the requested
+    # format. Showing an objective example (or its MCQ rules) inside a
+    # theory-only test makes Claude emit multiple-choice questions despite the
+    # "make every question open-ended" count rule, and vice versa. mixed keeps
+    # both. This is the format leak that put MCQs into theory assessments.
+    wants_objective = fmt in ("objective", "mixed")
+    wants_theory = fmt in ("theory", "mixed")
+    type_rules = ""
+    if wants_objective:
+        type_rules += (
+            "- For multiple choice: four options, and the correct option letter "
+            "(A, B, C, or D). Each option string is JUST the answer text. Do NOT "
+            "prefix it with 'A.', 'B)', or any letter — the app adds the letter "
+            "label itself.\n"
+        )
+    if wants_theory:
+        type_rules += (
+            "- For theory: a reference answer, and a rubric, which is the list of "
+            "key points worth marks, each with how many marks.\n"
+        )
+    explanation_rule = (
+        "- For EVERY objective question, also include an \"explanation\" "
+        "field: 1-3 plain-text sentences that tell the student WHY the "
+        "correct option is correct (drawing on the material the question "
+        "is based on). Keep it concise — enough to teach, not a wall of "
+        "text. This is shown on the post-test review screen alongside "
+        "the option text.\n\n"
+    ) if wants_objective else "\n"
+    _OBJ_SHAPE = (
+        '{"type":"objective","question":"...","options":["...","...","...","..."],'
+        '"correct_option":"A","explanation":"Brief 1-3 sentence reason this option is correct.","points":1,"source_chunks":[0],"needs_figure":false}'
+    )
+    _THEORY_SHAPE = (
+        '{"type":"theory","question":"...","reference_answer":"...",'
+        '"rubric":[{"point":"...","marks":2}],"points":5,"source_chunks":[1,2],"needs_figure":true}'
+    )
+    shape_example = '{"questions":[' + ",".join(
+        ([_OBJ_SHAPE] if wants_objective else []) +
+        ([_THEORY_SHAPE] if wants_theory else [])
+    ) + "]}"
+
     prompt = (
         f"You are setting a {level}-level {kind} from the material below. "
         f"{count_rule} "
@@ -403,12 +444,7 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
         "Rules:\n"
         "- Base everything strictly on the material.\n"
         "- Give the points each question is worth.\n"
-        "- For multiple choice: four options, and the correct option letter "
-        "(A, B, C, or D). Each option string is JUST the answer text. Do NOT "
-        "prefix it with 'A.', 'B)', or any letter — the app adds the letter "
-        "label itself.\n"
-        "- For theory: a reference answer, and a rubric, which is the list of "
-        "key points worth marks, each with how many marks.\n"
+        f"{type_rules}"
         "- For every question, include \"source_chunks\": a list of the chunk "
         "indices (the numbers in the [chunk N] markers above each passage) "
         "that the question is based on.\n"
@@ -458,19 +494,9 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
         "the circuit and find…\"). When needs_figure=false, the "
         "question text must NOT mention any figure / image / diagram "
         "/ graph / chart / photo.\n"
-        "- For EVERY objective question, also include an \"explanation\" "
-        "field: 1-3 plain-text sentences that tell the student WHY the "
-        "correct option is correct (drawing on the material the question "
-        "is based on). Keep it concise — enough to teach, not a wall of "
-        "text. This is shown on the post-test review screen alongside "
-        "the option text.\n\n"
+        f"{explanation_rule}"
         "Return ONLY valid JSON, no other text, in this shape:\n"
-        '{"questions":['
-        '{"type":"objective","question":"...","options":["...","...","...","..."],'
-        '"correct_option":"A","explanation":"Brief 1-3 sentence reason this option is correct.","points":1,"source_chunks":[0],"needs_figure":false},'
-        '{"type":"theory","question":"...","reference_answer":"...",'
-        '"rubric":[{"point":"...","marks":2}],"points":5,"source_chunks":[1,2],"needs_figure":true}'
-        "]}\n\n"
+        f"{shape_example}\n\n"
         f"Material:\n{cleaned_source}"
         + STYLE_RULES
     )
@@ -490,6 +516,13 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
     questions = extract_json(raw)["questions"]
+    # Backstop the prompt: for a single-format test, drop any off-format
+    # question Claude slipped in (an MCQ in a theory test, or vice versa).
+    # The prompt asks for one type; this guarantees it even if ignored. The
+    # type strings match what the rest of assess.py keys on ("objective" /
+    # "theory"). mixed keeps both.
+    if fmt in ("objective", "theory"):
+        questions = [q for q in questions if (q or {}).get("type") == fmt]
     # Hard cap even if the prompt is ignored. The student picked num and
     # that's what they get; over-generation produces a wrong score
     # denominator and burns review time.

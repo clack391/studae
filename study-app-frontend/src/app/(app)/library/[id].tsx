@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,7 +12,7 @@ import { Bar } from '@/components/ui/Bar';
 import { Button } from '@/components/ui/Button';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { DocThumb } from '@/components/domain/DocThumb';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
 /* ---------- 2x2 action tile ---------- */
 function ActionTile({ icon, label, onPress, onPressIn }: {
@@ -75,6 +75,15 @@ export default function DocDetail() {
     queryFn: () => api.documentProgress(id!),
   });
   useFocusEffect(useCallback(() => { doc.refetch(); sessions.refetch(); prog.refetch(); }, [id]));
+
+  // Document doesn't exist for this user (deleted, or never persisted). The
+  // detail screen has nothing to render, so send the user back to the library
+  // rather than leaving them on a broken page that re-404s on every refocus.
+  useEffect(() => {
+    if (doc.error instanceof ApiError && doc.error.status === 404) {
+      router.navigate('/(app)/library');
+    }
+  }, [doc.error, router]);
 
   const del = useMutation({
     mutationFn: () => api.deleteDocument(id!),

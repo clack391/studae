@@ -160,6 +160,51 @@ def test_find_chapter_range_text_layer_missing_is_none():
     assert ingest.find_chapter_page_range(doc, 5) is None
 
 
+def test_find_chapter_range_skips_front_matter_folios_and_toc():
+    # Regression for a real 495-page bookmark-less PDF whose "Chapter 1"
+    # resolved to its acknowledgments page: the text layer there held a lone
+    # "I" (start of "I am grateful ...") that parsed as roman 1, and the next
+    # roman folio "ix" closed the range, yielding a single front-matter page.
+    # A bare number/roman token (page folio, sentence-initial letter) and a
+    # contents page that lists many chapters must NOT count as a chapter start.
+    doc = fitz.open()
+    bodies = {
+        1: ["Title Page"] + [f"front {_FILLER}" for _ in range(6)],
+        # Front matter: lone roman folio and a lone sentence-initial "I". With
+        # no title following the token, neither is a heading.
+        2: ["ix", "I"] + [f"grateful to many reviewers {_FILLER}" for _ in range(6)],
+        # Contents page: four distinct chapter numbers on one page -> a TOC,
+        # skipped so its "Chapter 1" line doesn't match before the real body.
+        3: ["Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4"]
+           + [f"toc {_FILLER}" for _ in range(4)],
+        # Real chapter bodies further in.
+        4: ["Chapter 1"] + [f"body {_FILLER}" for _ in range(6)],
+        5: [f"more body {_FILLER}" for _ in range(6)],
+        6: ["Chapter 2"] + [f"body {_FILLER}" for _ in range(6)],
+    }
+    for i in range(6):
+        page = doc.new_page()
+        page.insert_text((72, 100), bodies[i + 1])
+    reopened = _open(doc.tobytes())
+    doc.close()
+    assert reopened.get_toc() == []  # bookmark-less -> text-layer fallback
+    # Chapter 1 = the real heading on page 4 (not page 2's "I", not the TOC).
+    assert ingest.find_chapter_page_range(reopened, 1) == (4, 5)
+    assert ingest.find_chapter_page_range(reopened, 2) == (6, 6)
+
+
+def test_line_chapter_number_rejects_bare_tokens_keeps_titled_headings():
+    # A bare page folio / sentence-initial roman letter is not a heading.
+    assert ingest._line_chapter_number("I") is None
+    assert ingest._line_chapter_number("ix") is None
+    assert ingest._line_chapter_number("42") is None
+    # A number/roman token FOLLOWED by a title still reads as a heading.
+    assert ingest._line_chapter_number("1 Numbers") == 1
+    assert ingest._line_chapter_number("IV. Functions") == 4
+    # The keyword form is unaffected.
+    assert ingest._line_chapter_number("Chapter 1") == 1
+
+
 def test_find_chapter_range_ignores_number_buried_in_prose():
     # A page whose body mentions "chapter 2" mid-sentence must NOT be read as
     # a heading; only the short standalone heading line counts.

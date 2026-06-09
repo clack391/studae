@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
 import { DocThumb } from '@/components/domain/DocThumb';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import type { DocumentDetail } from '@/lib/types';
 import { useTheme } from '@/lib/theme';
 const STAGES = [
@@ -30,10 +30,21 @@ export default function Ingest() {
     queryKey: ['doc', id],
     queryFn: () => api.getDocument(id!),
     refetchInterval: (q) => {
+      // Stop polling once the doc settles, OR once a fetch errors (a deleted
+      // doc 404s on every poll; without this the interval loops forever).
+      if (q.state.error) return false;
       const d = q.state.data;
       return d && (d.status === 'ready' || d.status === 'failed') ? false : 2000;
     },
   });
+
+  // The document is gone (deleted, or the upload never persisted). Don't sit
+  // on a dead progress screen polling a 404; bounce back to the library.
+  useEffect(() => {
+    if (doc.error instanceof ApiError && doc.error.status === 404) {
+      router.replace('/(app)/library');
+    }
+  }, [doc.error, router]);
 
   // When ingestion settles, invalidate the dashboard so the next visit to
   // Home / Library shows the doc in its final state without waiting for the

@@ -7,13 +7,21 @@ import { useFonts } from 'expo-font';
 import { Caveat_600SemiBold, Caveat_700Bold } from '@expo-google-fonts/caveat';
 import { Kalam_400Regular, Kalam_700Bold } from '@expo-google-fonts/kalam';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ApiError } from '@/lib/api';
 import { AuthProvider, Loading, useAuth } from '@/components/AuthProvider';
 import { ThemeProvider, useTheme, useThemeMode } from '@/lib/theme';
 
 const qc = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      // A 4xx is the server's verdict (404 gone, 403 forbidden, 422
+      // validation), not a transient fault, so retrying just doubles the
+      // request burst and the failure latency. Retry once for everything
+      // else (5xx, dropped connection).
+      retry: (failureCount, error) =>
+        error instanceof ApiError && error.status >= 400 && error.status < 500
+          ? false
+          : failureCount < 1,
       refetchOnWindowFocus: false,
       // Read queries stay fresh for 60 s. Revisiting Home / Library / Cards
       // within that window renders cached data instantly without any

@@ -6,7 +6,7 @@ import re
 import fitz  # pymupdf
 from google.genai import types
 
-from .clients import claude, gemini, STYLE_RULES, supabase, track_claude, track_gemini, track_gemini_embed
+from .clients import ANTI_INJECTION, claude, gemini, STYLE_RULES, supabase, track_claude, track_gemini, track_gemini_embed
 from .retry import QuotaExhausted, transient
 
 log = logging.getLogger(__name__)
@@ -29,6 +29,12 @@ OUTLINE_PROMPT = (
     "appendix that is purely a lookup table (units, abbreviations, "
     "contact information). If a section is genuinely instructional, "
     "keep it even if it sits in the front matter.\n\n"
+    "Output ONLY the outline itself. Never write a preface, an apology, a "
+    "refusal, or any commentary about what you did or did not find. If the "
+    "ONLY content in the material is a section you would normally drop (for "
+    "example the upload is just an acknowledgments page), do not refuse: "
+    "outline whatever text is actually present instead of returning nothing."
+    "\n\n"
 )
 
 MODEL_FAST = "gemini-2.5-flash-lite"
@@ -520,6 +526,12 @@ def _chapter_range_from_toc(doc, n: int) -> tuple[int, int] | None:
 # then the number as digits / roman / word, with little else on the line.
 _TEXT_HEADING_MAX_LEN = 60  # a heading is a SHORT line, not buried prose
 
+# A single page carrying this many DISTINCT chapter numbers is a table of
+# contents or a back-of-book index, not a chapter start. The text-layer scan
+# skips such pages so a TOC line "Chapter 1" doesn't match before the real
+# chapter body (real chapter starts carry one heading per page).
+_TOC_PAGE_DISTINCT_CHAPTERS = 3
+
 
 def _line_chapter_number(line: str) -> int | None:
     """If a text-layer line reads like a standalone chapter heading, return
@@ -530,12 +542,18 @@ def _line_chapter_number(line: str) -> int | None:
     if not stripped or len(stripped) > _TEXT_HEADING_MAX_LEN:
         return None
     has_keyword = bool(_CHAPTER_HEADING_RE.match(stripped))
-    # Without a keyword, require the line to START with a number/roman/word
-    # token AND be a short heading (avoids matching ordinary sentences).
-    if not has_keyword and not (
-        _LEADING_NUMBER_RE.match(stripped) or _LEADING_ROMAN_RE.match(stripped)
-    ):
-        return None
+    if not has_keyword:
+        # Without a keyword, require the line to START with a number/roman
+        # token that is FOLLOWED by title text ("1 Numbers", "IV. Functions").
+        # A bare token alone is a page folio ("ix", "42") or a sentence-initial
+        # roman letter ("I am grateful ..."), not a heading. Matching those is
+        # what made a 495-page book's "Chapter 1" resolve to its acknowledgments
+        # page (the lone "I" parsed as roman 1).
+        m = re.match(r"^\s*(?:\d+|[ivxlcdm]+\b)\s*", stripped, re.IGNORECASE)
+        if not m:
+            return None
+        if not stripped[m.end():].strip(" .:-\t)]}"):
+            return None
     return parse_chapter_request(stripped)
 
 
@@ -545,7 +563,12 @@ def _chapter_range_from_text(doc, n: int) -> tuple[int, int] | None:
     end = the page before the first `n+1` heading after start, else the last
     page. Conservative (short heading lines only) to avoid false positives.
     Returns None when no `n` heading is found. CHEAP — text layer only, no
-    OCR / API."""
+    OCR / API.
+
+    A page that lists many distinct chapter numbers is a table of contents or
+    an index, not a chapter start, so it is skipped as both a start and an end
+    candidate (otherwise a TOC entry "Chapter 1" matches before the real
+    chapter body, and a back-of-book index ends ranges prematurely)."""
     total = len(doc)
     start: int | None = None
     end = total
@@ -557,10 +580,11 @@ def _chapter_range_from_text(doc, n: int) -> tuple[int, int] | None:
         if not text:
             continue
         page_no = i + 1
-        for line in text.splitlines():
-            num = _line_chapter_number(line)
-            if num is None:
-                continue
+        nums = [m for m in (_line_chapter_number(l) for l in text.splitlines())
+                if m is not None]
+        if len(set(nums)) >= _TOC_PAGE_DISTINCT_CHAPTERS:
+            continue
+        for num in nums:
             if start is None:
                 if num == n:
                     start = page_no
@@ -924,7 +948,7 @@ def build_outline(text: str, ctx=None) -> str:
         "build_outline",
         model="claude-haiku-4-5",
         max_tokens=2000,
-        messages=[{"role": "user", "content": OUTLINE_PROMPT + text[:50000] + STYLE_RULES}],
+        messages=[{"role": "user", "content": OUTLINE_PROMPT + text[:50000] + ANTI_INJECTION + STYLE_RULES}],
         ctx=ctx,
     )
     return msg.content[0].text
