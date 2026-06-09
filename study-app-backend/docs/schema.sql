@@ -108,6 +108,25 @@ create index if not exists chunks_doc_idx on public.chunks(document_id);
 create index if not exists chunks_user_idx on public.chunks(user_id);
 -- One-shot to bring an existing deployment up to date:
 --   alter table public.chunks add column if not exists figure_is_blank boolean;
+
+-- lesson_figure_decisions — per (document_id, topic, chunk_id) cache
+-- of Haiku Vision's verdict on whether a chunk's figure should render
+-- alongside a lesson on that topic. `figure_is_blank` above is the
+-- topic-independent blank check; this table catches the off-topic
+-- case (figure has visible content but doesn't relate to the lesson).
+-- First lesson on a (chunk, topic) pair pays the vision cost; every
+-- later load reads the cache.
+create table if not exists public.lesson_figure_decisions (
+  id uuid primary key default gen_random_uuid(),
+  document_id uuid not null references public.documents(id) on delete cascade,
+  topic text not null,
+  chunk_id uuid not null references public.chunks(id) on delete cascade,
+  keep boolean not null,
+  decided_at timestamptz default now(),
+  unique (document_id, topic, chunk_id)
+);
+create index if not exists lfd_doc_topic_idx
+  on public.lesson_figure_decisions(document_id, topic);
 -- Add this when you cross ~500 users for faster vector search:
 --   create index on public.chunks using hnsw (embedding vector_cosine_ops);
 

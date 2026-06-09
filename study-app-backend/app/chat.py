@@ -612,21 +612,33 @@ def _haiku_vision_filter_photo_sources(
         return {cid for _, cid in indexed_kept}
 
 
-def _drop_blank_figures(sources: list[dict]) -> None:
-    """Drop figures that vision-verify decides are blank / contentless
-    (near-white pages, empty worksheet sheets, page scans with no
-    diagram or illustration). Decisions are cached on
-    `chunks.figure_is_blank` so the vision call only runs once per
-    chunk in this document's lifetime — first lesson load on a doc
-    pays the cost, every later lesson is free.
+def _drop_irrelevant_lesson_figures(
+    document_id: str,
+    topic: str,
+    sources: list[dict],
+) -> None:
+    """Drop lesson figures that are either BLANK / contentless or
+    OFF-TOPIC for the current lesson. Two caches feed this:
 
-    Mutates the sources list in place: clears `figure_path` on
-    confirmed-blank sources. Text snippet stays so any caption text
-    survives as a citation.
+      1. `chunks.figure_is_blank` — topic-independent. Set once per
+         chunk and reused across every lesson that surfaces it. Catches
+         the "near-white worksheet page" case where the image has no
+         visible content at all.
 
-    Failure modes (storage miss, vision error, malformed JSON, DB
+      2. `lesson_figure_decisions(document_id, topic, chunk_id, keep)`
+         — per-topic. Catches the "image has content but doesn't
+         relate to this lesson" case. A chunk's figure may be on-topic
+         for one outline point and off-topic for another.
+
+    First lesson load on a (chunk, topic) pair pays one Haiku Vision
+    call that returns BOTH bits at once. Every later load reads the
+    cache and pays nothing. Mutates sources in place: clears
+    `figure_path` on confirmed blanks or off-topic items; text snippet
+    stays so any caption text survives as a citation.
+
+    Failure modes (storage error, vision error, malformed JSON, DB
     write failure) all fall back to keeping the figure. A flaky
-    blank-check can never silently strip a legitimate diagram.
+    check can never silently strip a legitimate diagram.
     """
     import base64
 
@@ -634,38 +646,54 @@ def _drop_blank_figures(sources: list[dict]) -> None:
     if not figure_sources:
         return
 
-    # Pull cached decisions for any chunks we've already checked.
     chunk_ids = [s["chunk_id"] for s in figure_sources]
+
+    # --- Cache lookup ---
     try:
-        rows = supabase.table("chunks") \
+        blank_rows = supabase.table("chunks") \
             .select("id, figure_is_blank") \
             .in_("id", chunk_ids).execute().data or []
     except Exception as e:
-        log.warning("blank-figure cache lookup failed: %s: %s",
+        log.warning("lesson figure cache (blank) lookup failed: %s: %s",
                     type(e).__name__, e)
-        rows = []
-    cached = {r["id"]: r.get("figure_is_blank") for r in rows}
+        blank_rows = []
+    blank_cache = {r["id"]: r.get("figure_is_blank") for r in blank_rows}
 
-    # Apply cached decisions; collect the unknowns for a vision call.
+    try:
+        topic_rows = supabase.table("lesson_figure_decisions") \
+            .select("chunk_id, keep") \
+            .eq("document_id", document_id) \
+            .eq("topic", topic) \
+            .in_("chunk_id", chunk_ids).execute().data or []
+    except Exception as e:
+        log.warning("lesson figure cache (topic) lookup failed: %s: %s",
+                    type(e).__name__, e)
+        topic_rows = []
+    topic_cache = {r["chunk_id"]: r["keep"] for r in topic_rows}
+
+    # --- Apply cached decisions; collect unknowns ---
     needs_check: list[dict] = []
     for s in figure_sources:
-        decision = cached.get(s["chunk_id"])
-        if decision is True:
+        cid = s["chunk_id"]
+        if blank_cache.get(cid) is True:
             s["figure_path"] = None
-        elif decision is None:
-            needs_check.append(s)
-        # decision is False → keep, no action
+            continue
+        if cid in topic_cache:
+            if topic_cache[cid] is False:
+                s["figure_path"] = None
+            continue
+        needs_check.append(s)
 
     if not needs_check:
         return
 
-    # ONE batched Haiku Vision call. Cap at 8 images so a chunky lesson
-    # load can't balloon cost or latency on first-touch.
+    # ONE batched Haiku Vision call. Cap at 8 images so a chunky
+    # lesson load can't balloon cost or latency on first-touch.
     MAX_FIGURES = 8
     candidates = needs_check[:MAX_FIGURES]
 
     content: list[dict] = []
-    indexed: list[tuple[int, str]] = []  # (image_index_in_content, chunk_id)
+    indexed: list[tuple[int, str]] = []
     for s in candidates:
         fp = s["figure_path"]
         try:
@@ -674,7 +702,7 @@ def _drop_blank_figures(sources: list[dict]) -> None:
             media_type = _sniff_image_bytes(img_bytes) or "image/jpeg"
         except Exception as e:
             log.warning(
-                "blank-figure check: download failed %s: %s: %s",
+                "lesson figure filter: download failed %s: %s: %s",
                 fp, type(e).__name__, e,
             )
             continue
@@ -690,60 +718,110 @@ def _drop_blank_figures(sources: list[dict]) -> None:
         return
 
     prompt = (
-        f"Below are {len(indexed)} document figure(s). For EACH "
-        "image (by integer index starting at 0), decide whether it "
-        "is essentially BLANK or CONTENTLESS — a near-white page, "
-        "an empty worksheet sheet, a page that is mostly whitespace, "
-        "or any image with no readable / viewable visual content.\n\n"
-        "Be CONSERVATIVE: only mark as blank when the image truly "
-        "has no useful visual content. A page with even a small "
+        f"You are vetting {len(indexed)} document figure(s) for a "
+        f"lesson on this topic: \"{topic}\".\n\n"
+        "For EACH image (by integer index starting at 0), decide TWO "
+        "things:\n"
+        "  1. `blank`: is the image essentially blank / contentless — "
+        "a near-white page, an empty worksheet sheet, a page that is "
+        "mostly whitespace, with no readable / viewable visual "
+        "content? Be CONSERVATIVE — a page with even a small "
         "diagram, photograph, chart, plot, formula, or labelled "
-        "illustration is NOT blank.\n\n"
-        "Return ONLY a JSON object with the integer indices that "
-        "ARE BLANK, like: {\"blank\": [0, 2]}. An empty list "
-        "means nothing is blank."
+        "illustration is NOT blank.\n"
+        "  2. `on_topic`: does the image plausibly depict, "
+        "illustrate, or visually relate to the lesson topic above? "
+        "Be LENIENT — keep an image if it shows the relevant subject "
+        "matter even loosely. Mark off-topic only when the image is "
+        "clearly about a DIFFERENT subject (e.g. a topic on "
+        "'Anthracnose' should drop an image of an unrelated insect "
+        "or a chapter cover graphic, but keep any image of leaf "
+        "lesions or fungal symptoms even without a perfect match).\n\n"
+        "Return ONLY a JSON object with one entry per image, like:\n"
+        "{\"decisions\": ["
+        "{\"idx\": 0, \"blank\": false, \"on_topic\": true}, "
+        "{\"idx\": 1, \"blank\": true, \"on_topic\": false}"
+        "]}"
     )
     content.append({"type": "text", "text": prompt})
 
     try:
         raw = track_claude(
-            "lesson_blank_figure_check",
+            "lesson_figure_filter",
             model="claude-haiku-4-5",
-            max_tokens=120,
+            max_tokens=400,
             messages=[{"role": "user", "content": content}],
         ).content[0].text
         decision = _extract_json_obj(raw)
-        blank_raw = decision.get("blank") if isinstance(decision, dict) else None
-        if not isinstance(blank_raw, list):
-            log.warning("blank-figure check: malformed JSON, keeping all")
+        decisions_raw = decision.get("decisions") if isinstance(decision, dict) else None
+        if not isinstance(decisions_raw, list):
+            log.warning("lesson figure filter: malformed JSON, keeping all")
             return
-        blank_set = {
-            int(k) for k in blank_raw if isinstance(k, (int, float))
-        }
-        # Persist decisions per chunk so future loads skip the call.
+
+        decisions_by_idx: dict[int, dict] = {}
+        for entry in decisions_raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                idx = int(entry.get("idx"))
+            except (TypeError, ValueError):
+                continue
+            decisions_by_idx[idx] = entry
+
+        blank_count = offtopic_count = 0
         for haiku_idx, chunk_id in indexed:
-            is_blank = haiku_idx in blank_set
+            entry = decisions_by_idx.get(haiku_idx)
+            if not entry:
+                continue  # unknown verdict → keep as-is
+            is_blank = bool(entry.get("blank", False))
+            on_topic = bool(entry.get("on_topic", True))
+
+            # Persist blank verdict globally.
             try:
                 supabase.table("chunks").update(
                     {"figure_is_blank": is_blank}
                 ).eq("id", chunk_id).execute()
             except Exception as e:
                 log.warning(
-                    "blank-figure cache write failed for %s: %s: %s",
-                    chunk_id, type(e).__name__, e,
+                    "lesson figure: blank cache write failed for %s: %s",
+                    chunk_id, e,
                 )
+
+            # Persist topic verdict per (document, topic, chunk).
+            # Upsert so a re-check just overwrites the prior decision.
+            try:
+                supabase.table("lesson_figure_decisions").upsert(
+                    {
+                        "document_id": document_id,
+                        "topic": topic,
+                        "chunk_id": chunk_id,
+                        "keep": (not is_blank) and on_topic,
+                    },
+                    on_conflict="document_id,topic,chunk_id",
+                ).execute()
+            except Exception as e:
+                log.warning(
+                    "lesson figure: topic cache write failed for %s: %s",
+                    chunk_id, e,
+                )
+
+            # Apply to the source we have in-hand.
             if is_blank:
+                blank_count += 1
+            elif not on_topic:
+                offtopic_count += 1
+            if is_blank or not on_topic:
                 for s in needs_check:
                     if s["chunk_id"] == chunk_id:
                         s["figure_path"] = None
         log.info(
-            "lesson blank-figure check: %d blank of %d checked, %d cached",
-            len(blank_set), len(indexed),
+            "lesson figure filter [%s]: %d blank, %d off-topic, "
+            "of %d checked, %d cached",
+            topic[:40], blank_count, offtopic_count, len(indexed),
             len(figure_sources) - len(needs_check),
         )
     except Exception as e:
         log.warning(
-            "lesson blank-figure check call failed: %s: %s",
+            "lesson figure filter call failed: %s: %s",
             type(e).__name__, e,
         )
 
@@ -1805,12 +1883,15 @@ def teach_next(user_id, session_id):
                     topic_keywords=_topic_keywords(topic) or None,
                 )
                 sources = _ai_filter_sources(topic, cached[0]["content"], sources)
-                # Drop confirmed-blank figures using the cached
-                # chunks.figure_is_blank decisions. First lesson load
-                # on a doc pays the Haiku Vision cost; subsequent
-                # loads (this cached-peek path included) read from the
-                # cache and pay nothing.
-                _drop_blank_figures(sources)
+                # Drop blank AND off-topic figures using the cached
+                # decisions on chunks.figure_is_blank (global) and
+                # lesson_figure_decisions (per topic). First lesson
+                # load on a (chunk, topic) pair pays the Haiku Vision
+                # cost; this cached-peek path benefits from any prior
+                # decisions and only re-checks anything new.
+                _drop_irrelevant_lesson_figures(
+                    session["document_id"], topic, sources,
+                )
             return {"done": False, "topic": topic,
                     "lesson": cached[0]["content"],
                     "progress": f"{idx + 1} of {len(points)}",
@@ -1865,10 +1946,13 @@ def teach_next(user_id, session_id):
     # shares page 1 but unrelated intro photos sit there too. Returns
     # the input unchanged if the call errors out.
     sources = _ai_filter_sources(topic, lesson, sources)
-    # Drop confirmed-blank figures using the cached
-    # chunks.figure_is_blank decisions. First lesson load on a doc
-    # pays the Haiku Vision cost; subsequent loads read the cache.
-    _drop_blank_figures(sources)
+    # Drop blank AND off-topic figures using cached decisions on
+    # chunks.figure_is_blank (global) and lesson_figure_decisions
+    # (per topic). First lesson load on a (chunk, topic) pair pays
+    # one Haiku Vision call; every later load reads the cache.
+    _drop_irrelevant_lesson_figures(
+        session["document_id"], topic, sources,
+    )
     # Persist sources alongside the lesson so the transcript and the cached
     # peek can render the same figures + material citations without re-
     # running RAG. Column is jsonb on Postgres.
