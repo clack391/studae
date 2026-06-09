@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import urllib.parse
+import uuid
 from typing import Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, UploadFile
@@ -77,6 +78,30 @@ def _check_file_size(file_bytes: bytes, max_bytes: int):
             status_code=413,
             detail=f"File too large. Max {max_bytes // (1024 * 1024)} MB.",
         )
+
+
+def _sniff_image_type(b: bytes) -> str | None:
+    """Identify an image's real MIME type from its magic bytes.
+
+    The frontend FormData hardcodes image/jpeg on every picked photo, but
+    Android screenshots, gallery PNGs, and some camera apps return PNGs.
+    Anthropic's vision endpoint validates the declared media_type against
+    the actual content and returns 400 on mismatch — so we sniff and
+    trust the bytes instead of the multipart header.
+
+    Returns None for anything we don't recognise; the caller falls back
+    to the declared content_type."""
+    if len(b) < 12:
+        return None
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if b.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if b.startswith(b"GIF87a") or b.startswith(b"GIF89a"):
+        return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _upload_ext(filename: str) -> str:
@@ -456,13 +481,38 @@ async def ask_photo(
     img = await file.read()
     _check_file_size(img, MAX_UPLOAD_BYTES_PHOTO)
     user_q = (question or "").strip() or "Explain what is in this photo and how it relates to the material."
-    # Anthropic's vision endpoint expects a media_type. Default to JPEG if
-    # the upload didn't declare one.
-    media_type = (file.content_type or "image/jpeg").lower()
+    # Anthropic's vision endpoint validates that the media_type matches
+    # the actual image bytes. The frontend FormData hardcodes
+    # `type: 'image/jpeg'` for every picked image, so Android screenshots
+    # and other PNG-backed picks would arrive as PNG bytes labeled JPEG
+    # and Anthropic returned 400. Sniff the magic bytes ourselves and
+    # trust those over whatever the multipart upload claimed.
+    media_type = _sniff_image_type(img) or (file.content_type or "image/jpeg").lower()
     if media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
         media_type = "image/jpeg"
+    # Persist the photo to storage and pass the path to the chat layer
+    # so the user message in /sessions/{id}/messages carries
+    # `image_path`. Without this, the question appears in lesson
+    # history without the photo it was asked about. Path layout mirrors
+    # the answer-photo convention: scoped under the user id (RLS-safe),
+    # grouped per-session for cleanup, UUID to avoid collisions when
+    # the same session has multiple photo asks.
+    ext = {"image/jpeg": "jpg", "image/png": "png",
+           "image/gif": "gif", "image/webp": "webp"}[media_type]
+    photo_path = f"{user_id}/photos/{session_id}/{uuid.uuid4()}.{ext}"
+    try:
+        supabase.storage.from_("uploads").upload(
+            photo_path, img, {"content-type": media_type, "upsert": "true"})
+    except Exception as e:
+        # Storage hiccup shouldn't break the answer. Fall through with
+        # no image_path so the question still gets answered, just
+        # without the photo persisted to history.
+        log.warning("ask-photo storage upload failed: %s: %s",
+                    type(e).__name__, e)
+        photo_path = None
     answer, sources = answer_photo_question(
-        user_id, session_id, document_id, img, media_type, user_q, level)
+        user_id, session_id, document_id, img, media_type, user_q, level,
+        image_path=photo_path)
     # read_back stays in the response shape for backward compatibility with
     # the frontend, but it's empty now since Claude looks at the photo
     # directly and there's no separate OCR transcription to surface.

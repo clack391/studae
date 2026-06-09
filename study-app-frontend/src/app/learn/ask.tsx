@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { Chip } from '@/components/ui/Segmented';
 import { AiBubble, MeBubble } from '@/components/ui/Bubble';
 import { Composer } from '@/components/ui/Composer';
+import { Figure } from '@/components/ui/Figure';
 import { Pulse } from '@/components/ui/Pulse';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
@@ -30,7 +31,11 @@ const LEVEL_OPTIONS: { value: Level; label: string; sub: string }[] = [
   { value: 'professional', label: 'Professional', sub: 'Precise, terse, closer to source' },
 ];
 
-type Turn = { role: 'user' | 'assistant'; text: string; sources?: Source[] };
+// `imagePath` is set on user turns that came from a photo Ask, so the
+// transcript can re-render the original photo above the typed question.
+// Persists the visual context — without it, lesson history shows the
+// student asking about "this" with no idea what "this" referred to.
+type Turn = { role: 'user' | 'assistant'; text: string; sources?: Source[]; imagePath?: string };
 
 export default function Ask() {
   const C = useTheme();
@@ -131,6 +136,7 @@ export default function Ask() {
         role: m.role as 'user' | 'assistant',
         text: m.content as string,
         sources: m.role === 'assistant' ? (m.metadata?.sources ?? undefined) : undefined,
+        imagePath: m.role === 'user' ? (m.image_path ?? undefined) : undefined,
       }));
     setTurns(seeded);
     if (!hydrated) {
@@ -198,7 +204,12 @@ export default function Ask() {
           ) : null}
           {turns.map((t, i) =>
             t.role === 'user'
-              ? <MeBubble key={i} text={t.text} />
+              ? (
+                <View key={i} style={{ gap: 6 }}>
+                  {t.imagePath ? <Figure path={t.imagePath} /> : null}
+                  <MeBubble text={t.text} />
+                </View>
+              )
               : <AiBubble key={i} text={t.text} sources={t.sources} />,
           )}
           {/* Show the pulse the moment the user sends, not just once
@@ -214,7 +225,11 @@ export default function Ask() {
         </ScrollView>
         <Composer
           onSend={send}
-          onPhoto={() => router.push({ pathname: '/learn/photo', params: { documentId, sessionId } })}
+          // Carry the active Ask level into the photo screen so the
+          // session's level isn't silently reset to novice (photo.tsx
+          // falls back to 'novice' when params.level is missing, and
+          // the backend then persists that on chat_sessions.level).
+          onPhoto={() => router.push({ pathname: '/learn/photo', params: { documentId, sessionId, level } })}
           // Always editable. Session is created lazily on first send, so
           // we don't gate input on it. Send button is soft-locked while
           // a question is in flight or a session is being created.

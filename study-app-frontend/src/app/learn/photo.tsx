@@ -5,14 +5,11 @@ import { useMutation } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
-import { Card, Row } from '@/components/ui/Card';
+import { Row } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
-import { MD } from '@/components/ui/MD';
-import { Sources } from '@/components/ui/Sources';
 import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
-import { T } from '@/components/ui/T';
 import { PhotoPreview, ReadBackCard } from '@/components/domain/PhotoBox';
 import { api } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
@@ -66,9 +63,30 @@ export default function PhotoProblem() {
       // present, falls back to a generic "solve and explain" if blank.
       form.append('question', question);
       form.append('file', { uri, name: 'problem.jpg', type: 'image/jpeg' } as any);
-      return api.askPhoto(form);
+      const res = await api.askPhoto(form);
+      // Pass the final sid back through the mutation result so
+      // onSuccess can navigate to the chat thread for this session,
+      // even when ensureSession created it mid-mutation (the React
+      // state setSessionId from ensureSession's onSuccess may not
+      // have flushed by the time onSuccess here fires).
+      return { res, sid: sid! };
     },
-    onSuccess: (r) => setResult(r),
+    onSuccess: ({ res, sid }) => {
+      setResult(res);
+      // Drop the user straight into the chat thread for this session,
+      // with the photo + question + answer already in the message
+      // history. Without this, hitting the back arrow returns to
+      // /learn/ask with its original (often undefined) sessionId,
+      // and the chat thread looks empty even though the conversation
+      // exists in the DB. Users had to go via lesson history to see
+      // their own photo Ask, which was confusing and blocked
+      // follow-ups in place. Using replace so the back stack doesn't
+      // bounce them back here.
+      router.replace({
+        pathname: '/learn/ask',
+        params: { documentId, sessionId: sid, level },
+      });
+    },
     onError: (e: any) => {
       if (on402(e, router, 'question')) return;
       Alert.alert('Could not analyse', e?.message ?? '');
@@ -114,19 +132,10 @@ export default function PhotoProblem() {
           </>
         ) : null}
 
-        {result && !ask.isPending ? (
-          <Card>
-            <T v="handH3">Answer</T>
-            <MD>{result.answer}</MD>
-            {result.sources?.length ? <Sources items={result.sources} /> : null}
-            <Button
-              label="Continue in chat"
-              kind="soft"
-              block
-              onPress={() => router.replace({ pathname: '/learn/ask', params: { documentId, sessionId, level } })}
-            />
-          </Card>
-        ) : null}
+        {/* Answer card no longer renders here — the mutation's
+            onSuccess auto-navigates to /learn/ask so the photo + question
+            + answer show up in the chat thread itself. Anything rendered
+            here would only flash for a frame before route replace. */}
       </Screen>
     </View>
   );

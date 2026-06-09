@@ -368,6 +368,281 @@ _PHOTO_INTENT_CHECK = re.compile(
     re.IGNORECASE,
 )
 
+# Signals that an extracted question is math / quantitative — used to
+# auto-bump the 'answer' intent to 'explain' so the working is shown
+# even when the student typed something terse like "give me the answers".
+# Two layers:
+#   - operator/equation patterns that need digits and a math operator
+#     adjacent (so "I have 2 cats" doesn't trigger)
+#   - vocabulary that's almost only used in math / quantitative subjects
+# Over-matching is fine: showing working on a borderline question is
+# harmless, hiding it on a real math question is what we're fixing.
+_MATH_OP_RE = re.compile(
+    r"\d+\s*[+\-*/×÷^]\s*[\d(]|"            # 3 × 4, 5+7, (2+x)
+    r"=\s*\?|"                                # = ?
+    r"[a-zA-Z]\s*=\s*\d|"                    # x = 5
+    r"\d\s*=\s*[a-zA-Z]|"                    # 5 = x
+    r"\bx²|\bx\^|\bx\s*=|"                   # algebra variables
+    r"[√∫∑π∞≤≥≠÷×]|"                          # math symbols
+    r"\d+\s*(percent|%|°|km|cm|mm|kg|mol|N|J|W|Hz|Pa|°C|°F)\b",  # quantity units
+)
+_MATH_WORD_RE = re.compile(
+    r"\b("
+    # Pure math / algebra / calculus / geometry
+    r"solve|equation|equations|calculate|calculation|evaluate|"
+    r"simplify|factor(?:ise|ize)?|expand|differentiate|integrate|"
+    r"derivative|integral|slope|interpret|"
+    r"theorem|proof|prove|hypotenuse|angle|triangle|polygon|"
+    r"perimeter|circumference|radius|diameter|"
+    r"logarithm|exponent|exponential|polynomial|quadratic|"
+    r"matrix|vector|determinant|"
+    # Physics — mechanics
+    r"velocity|acceleration|force|momentum|displacement|"
+    r"kinetic|potential energy|gravitational|gravity|weight|"
+    r"work done|power|impulse|torque|inertia|equilibrium|"
+    r"projectile|trajectory|tension|friction|"
+    # Physics — waves / electromagnetism / thermo
+    r"wavelength|frequency|amplitude|period|oscillation|"
+    r"resistance|current|voltage|capacitance|inductance|"
+    r"resistor|capacitor|circuit|charge|electric field|magnetic field|"
+    r"pressure|temperature|enthalpy|entropy|heat|"
+    r"refraction|reflection|diffraction|interference|"
+    # Chemistry — stoichiometry / reactions / solutions
+    r"molar|moles?|stoichiometr|titration|concentration|molarity|"
+    r"yield|limiting reagent|equilibrium constant|pH|pOH|"
+    r"balance the equation|reaction|"
+    # Geography — maps, scale, gradient, climate, population, bearings
+    r"map scale|scale of \d|bearing|true bearing|grid bearing|"
+    r"gradient|contour interval|relief|"
+    r"latitude|longitude|coordinate|grid reference|"
+    r"time zone|gmt[ -]?[+-]|"
+    r"population density|growth rate|birth rate|death rate|"
+    r"migration rate|fertility rate|doubling time|"
+    r"rainfall|precipitation|climograph|"
+    # Economics / finance — quantitative
+    r"gdp|gnp|inflation rate|interest rate|exchange rate|"
+    r"elasticity|marginal cost|marginal revenue|marginal utility|"
+    r"compound interest|simple interest|depreciation|appreciation|"
+    r"net present value|npv|internal rate of return|irr|"
+    r"profit margin|return on (investment|equity)|roi|roe|"
+    r"break[- ]?even|opportunity cost|"
+    # Statistics / probability
+    r"mean|median|mode|range|variance|standard deviation|"
+    r"probability|distribution|histogram|quartile|percentile|"
+    r"correlation|regression|"
+    r"sample mean|hypothesis test|confidence interval|"
+    r"chi[- ]?square|p[- ]?value|z[- ]?score|t[- ]?test|"
+    # Accounting / business
+    r"balance sheet|trial balance|profit and loss|"
+    r"gross profit|net profit|cost of goods sold|cogs|"
+    r"asset|liabilit|equity|revenue|expense|"
+    # Computer science / engineering — quantitative
+    r"complexity|big[- ]?o|binary|hexadecimal|octal|"
+    r"truth table|boolean expression|"
+    r"stress|strain|modulus|efficiency|"
+    # Biology — quantitative
+    r"magnification|dilution factor|hardy[- ]?weinberg|allele frequency|"
+    r"population growth|carrying capacity|"
+    # Action verbs that strongly imply calculation no matter the noun
+    r"calculate the|determine the|compute the|estimate the|"
+    r"express as|round to|convert to|"
+    r"find (the )?(value|values|x|y|n|t|"
+    r"length|area|volume|magnitude|"
+    r"speed|velocity|acceleration|"
+    r"force|mass|weight|energy|power|"
+    r"current|voltage|resistance|"
+    r"angle|distance|height|width|depth|"
+    r"period|frequency|wavelength|"
+    r"concentration|pressure|temperature|rate|"
+    r"bearing|gradient|scale|"
+    r"density|growth rate|birth rate|death rate|"
+    r"gdp|inflation|cost|profit|interest|"
+    r"mean|median|probability|"
+    r"magnification|allele frequency)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# Words that signal a typed follow-up is referring back to a photo the
+# student already uploaded earlier in this session and needs Claude to
+# re-examine the actual image (not just its earlier text answer). When
+# any of these match, we download the most recent photo from storage
+# and re-attach it as a vision content block on the final user message.
+#
+# Conservative bias is fine here — false positives waste maybe ~$0.001
+# per call on an extra image; false negatives leave the student asking
+# "what does the bottom-right corner say?" and getting "I don't have
+# the photo in front of me" back, which is a worse outcome.
+_VISUAL_FOLLOWUP_RE = re.compile(
+    r"\b("
+    r"photo|photos|image|images|picture|pictures|"
+    r"diagram|diagrams|figure|figures|drawing|drawings|"
+    r"chart|charts|graph|graphs|illustration|illustrations|"
+    r"table|tables|page|pages|worksheet|slide|slides|screenshot|"
+    r"corner|line|paragraph|caption|label|sentence|word|symbol|"
+    r"top[- ]?(left|right)|bottom[- ]?(left|right)|"
+    r"side of (the |this )?(photo|image|page)|"
+    r"what does (it|that|this|the photo|the image|the diagram|the page) (say|show)|"
+    r"recheck|re-?read|re-?examine|re-?look|look again|see again|"
+    r"unclear|hard to read|can'?t (read|see)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _should_reattach_photo(question: str) -> bool:
+    """True when the typed follow-up text references the photo and
+    needs Claude to re-examine the image bytes. See _VISUAL_FOLLOWUP_RE
+    for the exact triggers. Empty / None question returns False."""
+    return bool(_VISUAL_FOLLOWUP_RE.search(question or ""))
+
+
+def _haiku_vision_filter_photo_sources(
+    extracted_questions: list[str],
+    sources: list[dict],
+) -> set[str]:
+    """Vision-verify document figures attached to a photo Ask reply.
+
+    Sends every figure-bearing source's image, in a single Haiku 4.5
+    Vision call, alongside the questions the student photographed.
+    Asks Haiku which figures actually depict / illustrate / relate to
+    the student's questions, and which are off-topic noise (blank
+    pages, unrelated cover graphics, near-white worksheet pages).
+
+    Returns the set of `chunk_id`s whose `figure_path` should stay on
+    the response. Sources not in the set keep their text snippet (so
+    citations stand) but have `figure_path` cleared upstream so the
+    chat UI doesn't render an empty white card.
+
+    Failure modes (download error, vision error, malformed JSON) all
+    fall back to keeping everything so a flaky pass can't silently
+    blank a legitimate result.
+    """
+    import base64
+    figure_sources = [s for s in sources if s.get("figure_path")]
+    if not figure_sources:
+        return set()
+
+    questions_block = "\n".join(f"- {q}" for q in extracted_questions if q)
+    if not questions_block:
+        # No questions to compare against — bias keeps everything.
+        return {s["chunk_id"] for s in figure_sources}
+
+    # Hard cap on how many figures we vision-check per photo Ask. Each
+    # figure is ~1500 input tokens to Haiku; 8 caps the worst case at
+    # ~12k input tokens plus the prompt, well inside the model window.
+    MAX_FIGURES = 8
+    candidates = figure_sources[:MAX_FIGURES]
+
+    content: list[dict] = []
+    indexed_kept: list[tuple[int, str]] = []  # (image_index, chunk_id)
+    for s in candidates:
+        fp = s["figure_path"]
+        try:
+            img_bytes = supabase.storage.from_("uploads").download(fp)
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            media_type = _sniff_image_bytes(img_bytes) or "image/jpeg"
+        except Exception as e:
+            log.warning(
+                "photo-ask figure filter: download failed for %s: %s: %s",
+                fp, type(e).__name__, e,
+            )
+            continue
+        indexed_kept.append((len(content), s["chunk_id"]))
+        content.append({
+            "type": "image",
+            "source": {"type": "base64",
+                       "media_type": media_type,
+                       "data": b64},
+        })
+
+    if not indexed_kept:
+        # Every download failed — keep everything to be safe.
+        return {s["chunk_id"] for s in figure_sources}
+
+    prompt = (
+        "You are filtering document figures shown alongside a "
+        "student's photo Ask. The student photographed a study "
+        "page containing these questions:\n\n"
+        f"{questions_block}\n\n"
+        f"Above are {len(indexed_kept)} figure(s) retrieved from "
+        "the document, listed in order (image at index 0 first, "
+        "then index 1, and so on).\n\n"
+        "For EACH figure, decide whether it plausibly depicts, "
+        "illustrates, or visually relates to the student's "
+        "questions (or the subject they are clearly learning). "
+        "Be LENIENT: keep a figure when it shows relevant subject "
+        "matter even if it does not match one specific question. "
+        "DROP a figure only when it is clearly off-topic: a "
+        "blank / near-white page, an empty worksheet page with no "
+        "visible content, a cover graphic, a title slide, a "
+        "section header, or any image whose visual content adds "
+        "nothing to answering the student's questions.\n\n"
+        "Return ONLY a JSON object with the integer indices to "
+        "KEEP, like: {\"keep\": [0, 2]}. An empty list is fine — "
+        "drop everything if no figure is useful."
+    )
+    content.append({"type": "text", "text": prompt})
+
+    try:
+        raw = track_claude(
+            "photo_ask_figure_filter",
+            model="claude-haiku-4-5",
+            max_tokens=200,
+            messages=[{"role": "user", "content": content}],
+        ).content[0].text
+        decision = _extract_json_obj(raw)
+        keep_indices = decision.get("keep") if isinstance(decision, dict) else None
+        if not isinstance(keep_indices, list):
+            log.warning("photo-ask figure filter: malformed JSON, keeping all")
+            return {cid for _, cid in indexed_kept}
+        keep_int = {int(k) for k in keep_indices if isinstance(k, (int, float))}
+        kept = {cid for idx, cid in indexed_kept if idx in keep_int}
+        log.info(
+            "photo-ask figure filter: kept %d of %d figures",
+            len(kept), len(indexed_kept),
+        )
+        return kept
+    except Exception as e:
+        log.warning(
+            "photo-ask figure filter call failed: %s: %s",
+            type(e).__name__, e,
+        )
+        return {cid for _, cid in indexed_kept}
+
+
+def _sniff_image_bytes(b: bytes) -> str | None:
+    """Identify an image's real MIME type from its magic bytes. Mirrors
+    main._sniff_image_type but inlined here to avoid a circular import
+    (main imports chat, not the other way)."""
+    if len(b) < 12:
+        return None
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if b.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if b.startswith(b"GIF87a") or b.startswith(b"GIF89a"):
+        return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _extracted_looks_like_math(extracted_questions: list[str]) -> bool:
+    """True when at least one extracted question reads as math / quant.
+
+    Used to auto-bump the 'answer' photo-Ask intent to 'explain' on
+    math photos so students see the working. Conservative bias: needs
+    only one of N questions to look math-y, since worksheets often mix
+    a couple of math problems with definitional ones."""
+    for q in extracted_questions:
+        if not q:
+            continue
+        if _MATH_OP_RE.search(q) or _MATH_WORD_RE.search(q):
+            return True
+    return False
+
 
 def _detect_photo_intent(typed_prompt: str) -> str:
     """Classify what the student wants done with the photographed work.
@@ -519,7 +794,8 @@ def _extract_questions_from_photo(image_b64: str, media_type: str,
 
 def answer_photo_question(user_id, session_id, document_id,
                           image_bytes: bytes, media_type: str,
-                          question: str, level: str):
+                          question: str, level: str,
+                          image_path: str | None = None):
     """Ask Claude a question (or several) grounded in a photo + the
     document material.
 
@@ -591,7 +867,8 @@ def answer_photo_question(user_id, session_id, document_id,
         supabase.table("messages").insert([
             {"session_id": session_id, "user_id": user_id,
              "role": "user",
-             "content": f"[photo: {len(extracted)} questions] {question or ''}".strip()},
+             "content": f"[photo: {len(extracted)} questions] {question or ''}".strip(),
+             "image_path": image_path},
             {"session_id": session_id, "user_id": user_id,
              "role": "assistant", "content": reply,
              "metadata": {"sources": []}},
@@ -659,6 +936,17 @@ def answer_photo_question(user_id, session_id, document_id,
     if intent == "ask":
         intent = "answer"
 
+    # Auto-bump 'answer' to 'explain' on math / quant photos so the
+    # working is shown even when the student typed something terse like
+    # "give me the answers". A direct-answer reply on a math worksheet
+    # tells the student the number without the method, which defeats
+    # the purpose of using a study app. Doesn't override 'explain' or
+    # 'check' — those were explicitly chosen by the student's wording.
+    if intent == "answer" and _extracted_looks_like_math(extracted):
+        log.info("ask-photo: bumping intent answer -> explain "
+                 "(math signals detected in extracted questions)")
+        intent = "explain"
+
     intent_clause = {
         "answer": (
             "Give a direct answer first, then one or two sentences of "
@@ -678,14 +966,35 @@ def answer_photo_question(user_id, session_id, document_id,
     }[intent]
 
     answer_format_clause = (
-        "Answer EACH question separately. For each, write a clear "
-        "heading like '**Question 1:** <restate the question>' on its "
-        "own line, then the answer below. If a question is best "
-        "answered visually (anatomy / disease / diagram), reference "
-        "what the photo shows."
+        "Answer EACH question separately, using this exact markdown "
+        "format so the student can scan the reply:\n"
+        "1. Start each question with a level-3 heading: "
+        "'### Question N: <restate the question> = <final answer>'. "
+        "If the question already has an '=' sign (arithmetic, "
+        "algebra, balanced equation, percentage, conversion), put "
+        "the final numerical / symbolic answer on the SAME line, "
+        "directly after the existing '=' — for example: "
+        "'### Question 1: (-18) + (+6) = -12'. For non-equation "
+        "questions, format the heading as "
+        "'### Question N: <restate the question>' and put the "
+        "answer on the next line.\n"
+        "2. On the line(s) below the heading, write the reasoning "
+        "or working (one or two short sentences for 'answer', a "
+        "few clear steps for 'explain'). Keep it tight.\n"
+        "3. Separate each question's block from the next with a "
+        "blank line, then '---' on its own line, then another "
+        "blank line. This horizontal rule renders as a clear "
+        "divider in the chat UI.\n"
+        "4. Do NOT reference document figures or page numbers in "
+        "the body of the answer. The student's photo IS the "
+        "visual context — refer to it directly if a question is "
+        "best answered visually."
         if multi else
-        "Answer the question grounded in the material. If the question "
-        "is visual, reference what the photo shows."
+        "Answer the question grounded in the material. If the "
+        "question contains an '=' sign (arithmetic / equation / "
+        "conversion), put the final answer on the same line as "
+        "the existing '=' and put the reasoning below. If the "
+        "question is visual, reference what the photo shows."
     )
 
     outline_clause = (
@@ -749,10 +1058,28 @@ def answer_photo_question(user_id, session_id, document_id,
         messages=msgs,
     ).content[0].text
 
-    # /ask-photo: student handed over a photo. Always keep figure_paths
-    # in sources here — the question is implicitly visual.
+    # /ask-photo: student handed over a photo, so the photo IS the
+    # primary visual context. Two-stage source clean-up:
+    #
+    #   1. Drop sources with no text snippet at all — these are orphan
+    #      figure-only chunks that almost always render as empty
+    #      white cards from worksheet-style PDFs.
+    #
+    #   2. For surviving sources that still carry a `figure_path`,
+    #      vision-verify each figure against the extracted questions.
+    #      Haiku decides which figures depict / illustrate the
+    #      questions vs which are near-blank or off-topic. Sources
+    #      that fail the vision check keep their text snippet (the
+    #      citation stands) but lose `figure_path` so the chat UI
+    #      stops rendering the empty card.
     sources = _sources_from_search(
         all_chunks, document_id=document_id, user_id=user_id)
+    sources = [s for s in sources if (s.get("snippet") or "").strip()]
+    if any(s.get("figure_path") for s in sources):
+        keep_fig_ids = _haiku_vision_filter_photo_sources(extracted, sources)
+        for s in sources:
+            if s.get("figure_path") and s.get("chunk_id") not in keep_fig_ids:
+                s["figure_path"] = None
 
     # Persist text-only versions for the chat transcript. We deliberately
     # do not re-store the image bytes in messages: subsequent turns rely
@@ -765,7 +1092,8 @@ def answer_photo_question(user_id, session_id, document_id,
     )
     supabase.table("messages").insert([
         {"session_id": session_id, "user_id": user_id,
-         "role": "user", "content": transcript_question},
+         "role": "user", "content": transcript_question,
+         "image_path": image_path},
         {"session_id": session_id, "user_id": user_id,
          "role": "assistant", "content": reply,
          "metadata": {"sources": sources}},
@@ -916,8 +1244,10 @@ def answer_question(user_id, session_id, document_id, question, level):
             log.exception("failed to update chat_session level for %s", session_id)
 
     # Pull the message history once; we need it both for the embedding
-    # query (to resolve pronouns) and for the LLM call further down.
-    history = supabase.table("messages").select("role, content") \
+    # query (to resolve pronouns), for the LLM call further down, and
+    # to find any photos the student previously uploaded in this
+    # session so a visual follow-up can re-attach the image.
+    history = supabase.table("messages").select("role, content, image_path") \
         .eq("session_id", session_id).order("created_at").execute().data or []
 
     # Load the document outline once at the top — used for topic-tagging
@@ -1081,10 +1411,61 @@ def answer_question(user_id, session_id, document_id, question, level):
     HISTORY_TAIL = 20
     recent = [m for m in history if m.get("content")][-HISTORY_TAIL:]
     msgs = [{"role": m["role"], "content": m["content"]} for m in recent]
-    msgs.append({
-        "role": "user",
-        "content": f"Material:\n{context}\n\nQuestion: {question}",
-    })
+
+    # Smart photo re-attach. When the typed follow-up clearly refers to
+    # a visual ("what does the corner of the photo say?", "the diagram
+    # is unclear, redo question 3") AND the session has at least one
+    # earlier photo Ask, fetch the most recent photo from storage and
+    # attach it as a vision content block on the final user message so
+    # Claude can re-examine the image. Without this, Claude only sees
+    # its own prior text answer and can't recheck details on the photo.
+    #
+    # Triggers are conservative on the visual-reference side
+    # (_VISUAL_FOLLOWUP_RE) so most follow-ups stay text-only and save
+    # tokens. Most-recent-photo wins because "the photo" almost always
+    # means the latest one. Any failure (storage miss, download error)
+    # falls through to text-only with a warning — never breaks the
+    # request.
+    photo_block = None
+    if _should_reattach_photo(question):
+        recent_photo_path = next(
+            (m.get("image_path") for m in reversed(history)
+             if m.get("role") == "user" and m.get("image_path")),
+            None,
+        )
+        if recent_photo_path:
+            try:
+                import base64
+                img_bytes = supabase.storage.from_("uploads").download(
+                    recent_photo_path)
+                media_type = _sniff_image_bytes(img_bytes) or "image/jpeg"
+                photo_block = {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64.b64encode(img_bytes).decode("ascii"),
+                    },
+                }
+                log.info(
+                    "answer_question: re-attached photo %s for visual "
+                    "follow-up in session %s",
+                    recent_photo_path, session_id,
+                )
+            except Exception as e:
+                log.warning(
+                    "photo re-attach failed for %s: %s: %s",
+                    recent_photo_path, type(e).__name__, e,
+                )
+
+    final_text = f"Material:\n{context}\n\nQuestion: {question}"
+    if photo_block:
+        msgs.append({
+            "role": "user",
+            "content": [photo_block, {"type": "text", "text": final_text}],
+        })
+    else:
+        msgs.append({"role": "user", "content": final_text})
 
     # Haiku 4.5 for typed Ask. Same rationale as answer_photo_question:
     # RAG-grounded synthesis, not derivation. Flip back to
