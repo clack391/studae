@@ -1,6 +1,21 @@
 import { useMemo } from 'react';
 import Markdown from 'react-native-markdown-display';
 import { F, useTheme } from '@/lib/theme';
+import { MathHTML } from './MathHTML';
+
+// Detects LaTeX / chemistry math so only those bodies pay the WebView cost;
+// plain markdown keeps the native renderer. Matches $$...$$ display math, an
+// inline $...$ pair whose contents look mathematical (so a bare "$5" price is
+// NOT treated as math), \( / \[ delimiters, or a known LaTeX/mhchem command.
+const MATH_RE =
+  /\$\$[\s\S]+?\$\$|\$[^$\n]*[\\^_{}|][^$\n]*\$|\\[([]|\\(?:ce|frac|sqrt|sum|int|vec|begin|cdot|times|approx|alpha|beta|gamma|theta|lambda|mu|pi|sigma|omega|Delta|Omega)\b/;
+
+// True when a string contains LaTeX/chemistry math. Lets callers (test
+// questions, MCQ options) keep their own styled <T> for plain text and only
+// switch to the math renderer when there's actually math to typeset.
+export function hasMath(s: string | null | undefined): boolean {
+  return !!s && MATH_RE.test(s);
+}
 
 // Tuned so lesson bodies, summaries, and grading reasoning read sharply on
 // the paper background. Body is 15 px / lh 24 with ink-color text.
@@ -34,5 +49,8 @@ function makeStyles(C: ReturnType<typeof useTheme>) {
 export function MD({ children }: { children: string }) {
   const C = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
+  if (children && MATH_RE.test(children)) {
+    return <MathHTML>{children}</MathHTML>;
+  }
   return <Markdown style={styles}>{children}</Markdown>;
 }

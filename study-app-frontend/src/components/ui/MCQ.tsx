@@ -1,6 +1,8 @@
 import { Pressable, View } from 'react-native';
 import { F, useTheme } from '@/lib/theme';
 import { T } from './T';
+import { MathHTML } from './MathHTML';
+import { hasMath } from './MD';
 
 export function MCQ({ letter, text, selected, state, onPress }: {
   letter: string;
@@ -44,7 +46,13 @@ export function MCQ({ letter, text, selected, state, onPress }: {
       >
         <T style={{ fontFamily: F.hand, fontSize: 15, color: bubbleColor }}>{letter}</T>
       </View>
-      <T style={{ flex: 1, fontSize: 13, color: C.ink, lineHeight: 17 }}>{text}</T>
+      {hasMath(text) ? (
+        <View style={{ flex: 1 }}>
+          <MathHTML fontPx={13} interactive={false}>{text}</MathHTML>
+        </View>
+      ) : (
+        <T style={{ flex: 1, fontSize: 13, color: C.ink, lineHeight: 17 }}>{text}</T>
+      )}
     </Pressable>
   );
 }

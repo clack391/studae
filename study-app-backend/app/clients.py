@@ -49,6 +49,12 @@ STYLE_RULES = (
     "never use em dashes (the '—' character). "
     "Use periods, commas, colons, or parentheses to separate clauses instead. "
     "Write directly. Avoid hedging fillers and throat-clearing. "
+    "When you write mathematical or scientific notation, format it as LaTeX: "
+    "wrap inline math in single dollar signs ($...$) and standalone equations "
+    "in double dollar signs ($$...$$). Write chemical formulas and reaction "
+    "equations using LaTeX mhchem syntax inside those delimiters, for example "
+    "$\\ce{H2SO4}$ and $$\\ce{2H2 + O2 -> 2H2O}$$. Do not write math as bare "
+    "ASCII such as a^2, x_1, or H2O without delimiters. "
     "This rule applies to every sentence you write, including text inside "
     "JSON fields you return."
 )

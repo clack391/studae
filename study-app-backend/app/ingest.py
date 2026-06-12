@@ -13,7 +13,11 @@ log = logging.getLogger(__name__)
 
 READ_PROMPT = (
     "Transcribe this page exactly. Keep the wording. "
-    "For any math, write it in LaTeX. "
+    "For any math, write it in LaTeX wrapped in delimiters: inline math in "
+    "single dollars ($...$) and standalone equations in double dollars "
+    "($$...$$). For chemical formulas and reaction equations, use LaTeX "
+    "mhchem syntax inside the same delimiters, e.g. $\\ce{H2SO4}$ and "
+    "$$\\ce{2H2 + O2 -> 2H2O}$$. "
     "For any diagram or figure, give a short description inside [square brackets]."
 )
 

@@ -137,7 +137,10 @@ export async function setTtsVoice(v: Voice | null): Promise<void> {
  *  choosing. Stops any current speech first. */
 export function previewVoice(voiceId?: string) {
   Speech.stop();
-  Speech.speak('Hi, this is how I will read your lessons aloud.', { voice: voiceId });
+  Speech.speak('Hi, this is how I will read your lessons aloud.', {
+    voice: voiceId,
+    rate: SPEECH_RATE,
+  });
 }
 
 type Cbs = {
@@ -152,6 +155,11 @@ type Cbs = {
 // to leave room for whatever transformations the platform applies (TTS
 // engines sometimes expand abbreviations / punctuation internally).
 const CHUNK_LIMIT = 3500;
+
+// Speaking rate passed to every Speech.speak call. 1.0 is the engine default,
+// which reads noticeably fast; 0.8 is a calmer, more lesson-friendly pace.
+// Lower = slower. Adjust here to change the read-aloud speed app-wide.
+const SPEECH_RATE = 0.8;
 
 // Module-level cancellation token. Each speakLesson call bumps the
 // generation; if a chunk's onDone fires while a NEWER speak is in
@@ -211,6 +219,7 @@ export function speakLesson(text: string, cbs: Cbs = {}) {
     const chunk = chunks[idx++];
     Speech.speak(chunk, {
       voice: _voiceId,
+      rate: SPEECH_RATE,
       onDone: () => {
         if (gen !== speakGen) return;
         next();
@@ -229,6 +238,108 @@ export function stopSpeaking() {
   Speech.stop();
 }
 
+// ---- Math / chemistry to speech ------------------------------------------
+// Lesson/summary/answer content can contain LaTeX ($...$, $$...$$) and mhchem
+// (\ce{...}) now that the UI typesets math. Read aloud, raw LaTeX is gibberish
+// ("dollar backslash sqrt brace"). mathToSpeech turns it into words. It is
+// deliberately heuristic: it covers school-level maths / physics / chemistry
+// well rather than being a complete LaTeX speech engine.
+
+const GREEK: Record<string, string> = {
+  alpha: 'alpha', beta: 'beta', gamma: 'gamma', delta: 'delta',
+  epsilon: 'epsilon', zeta: 'zeta', eta: 'eta', theta: 'theta',
+  kappa: 'kappa', lambda: 'lambda', mu: 'mu', nu: 'new', xi: 'ksai',
+  pi: 'pie', rho: 'row', sigma: 'sigma', tau: 'tow', phi: 'fie',
+  chi: 'kai', psi: 'sigh', omega: 'omega', Delta: 'delta', Sigma: 'sigma',
+  Omega: 'omega', Theta: 'theta', Phi: 'fie', Pi: 'pie', nabla: 'del',
+};
+
+const OPS: Record<string, string> = {
+  times: ' times ', cdot: ' dot ', div: ' divided by ',
+  pm: ' plus or minus ', mp: ' minus or plus ', approx: ' approximately ',
+  neq: ' not equal to ', ne: ' not equal to ',
+  leq: ' less than or equal to ', le: ' less than or equal to ',
+  geq: ' greater than or equal to ', ge: ' greater than or equal to ',
+  rightarrow: ' approaches ', to: ' approaches ', leftarrow: ' from ',
+  infty: ' infinity ', sum: ' the sum of ', prod: ' the product of ',
+  int: ' the integral of ', partial: ' partial ', propto: ' proportional to ',
+  cdots: ' and so on ', ldots: ' and so on ', dots: ' and so on ',
+  circ: ' degrees ', degree: ' degrees ',
+};
+
+// Convert one mhchem body, e.g. "2H2 + O2 -> 2H2O" -> "2 H 2 plus O 2 yields..".
+function chemToWords(body: string): string {
+  return body
+    .replace(/<=>>?|<->/g, ' in equilibrium with ')
+    .replace(/->|→/g, ' yields ')
+    .replace(/\+/g, ' plus ')
+    .replace(/\(\s*(aq|s|l|g)\s*\)/g, ' $1 ')
+    // split before each element symbol (uppercase) so "SO4" -> "S O 4",
+    // "NH3" -> "N H 3", while two-letter symbols like "Na"/"Cl" stay intact
+    .replace(/([A-Za-z0-9])(?=[A-Z])/g, '$1 ')
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')
+    .replace(/(\d)([A-Za-z])/g, '$1 $2')
+    // speak grouping brackets, e.g. Ca(OH)2 -> "Ca open bracket O H close bracket 2"
+    .replace(/\(/g, ' open bracket ')
+    .replace(/\)/g, ' close bracket ')
+    .replace(/[{}^]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Convert the inside of a math span to words.
+function texToWords(tex: string): string {
+  let s = tex;
+  s = s.replace(/\\ce\s*\{([^}]*)\}/g, (_m, b) => ' ' + chemToWords(b) + ' ');
+  s = s.replace(/\\d?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, ' $1 over $2 ');
+  s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, ' the square root of ($1) ');
+  s = s.replace(/\\vec\s*\{([^{}]*)\}/g, ' vector $1 ');
+  s = s.replace(/\\(hat|bar|dot|tilde)\s*\{([^{}]*)\}/g, ' $2 $1 ');
+  s = s.replace(/\\text\s*\{([^{}]*)\}/g, ' $1 ');
+  s = s.replace(/\^\s*\{?\s*2\s*\}?/g, ' squared ');
+  s = s.replace(/\^\s*\{?\s*3\s*\}?/g, ' cubed ');
+  s = s.replace(/\^\s*\{([^{}]*)\}/g, ' to the power $1 ');
+  s = s.replace(/\^\s*(\w)/g, ' to the power $1 ');
+  s = s.replace(/_\s*\{([^{}]*)\}/g, ' sub $1 ');
+  s = s.replace(/_\s*(\w)/g, ' sub $1 ');
+  s = s.replace(/\\([A-Za-z]+)/g, (_m, name: string) => {
+    if (GREEK[name]) return ' ' + GREEK[name] + ' ';
+    if (OPS[name]) return OPS[name];
+    if (name === 'left' || name === 'right' || name === 'displaystyle') return '';
+    return ' ' + name + ' ';
+  });
+  s = s
+    .replace(/\|([^|]+)\|/g, ' the magnitude of $1 ')
+    // Speak grouping brackets so "(a+b) squared" is not heard as "a+b squared".
+    .replace(/\(/g, ' open bracket ')
+    .replace(/\)/g, ' close bracket ')
+    .replace(/\[/g, ' open square bracket ')
+    .replace(/\]/g, ' close square bracket ')
+    .replace(/=/g, ' equals ')
+    .replace(/\+/g, ' plus ')
+    .replace(/-/g, ' minus ')
+    .replace(/\*/g, ' times ')
+    .replace(/</g, ' less than ')
+    .replace(/>/g, ' greater than ')
+    .replace(/[{}]/g, ' ')
+    .replace(/\\[,;!:>]/g, ' ');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+// Replace LaTeX / mhchem in a full string with speakable words. Delimited math
+// ($$..$$, \[..\], \(..\), $..$) is converted; a bare "$5" price is left alone.
+export function mathToSpeech(s: string): string {
+  let out = s
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_m, m) => ' ' + texToWords(m) + ' ')
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_m, m) => ' ' + texToWords(m) + ' ')
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_m, m) => ' ' + texToWords(m) + ' ')
+    .replace(/\$([^$\n]+)\$/g, (full, m) =>
+      /[\\^_{}=|]|[A-Za-z]\d|\d[A-Za-z]/.test(m) ? ' ' + texToWords(m) + ' ' : full);
+  // any \ce{...} that was not wrapped in math delimiters (older content / chat)
+  out = out.replace(/\\ce\s*\{([^}]*)\}/g, (_m, b) => ' ' + chemToWords(b) + ' ');
+  return out;
+}
+
 /**
  * Remove markdown syntax so TTS reads the actual content, not "hash hash
  * star star important star star". Two earlier copies of this lived in
@@ -243,7 +354,10 @@ export function stopSpeaking() {
  * This consolidated version handles all of those.
  */
 export function stripMarkdown(s: string): string {
-  return s
+  // Math first: convert LaTeX/mhchem to words before the markdown passes,
+  // which would otherwise mangle subscripts (the `_x_` italic rule) and leave
+  // raw "$ \sqrt { }" for TTS to read literally.
+  return mathToSpeech(s)
     // Code fences: drop entirely, the contents are usually code and we
     // don't want TTS to read code aloud.
     .replace(/```[\s\S]*?```/g, ' ')
