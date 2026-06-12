@@ -162,6 +162,25 @@ def _has_phrase_shaped_bracket(text: str) -> bool:
     return False
 
 
+def _is_blank_pixmap(pix) -> bool:
+    """True when a pixmap is essentially blank and not worth showing as a
+    figure: a solid colour (PDF image-mask / alpha layer that renders as a
+    black box) OR a near-empty page carrying only a stray speck. We downscale
+    first so a few lone dark pixels get averaged into the background instead of
+    fooling a raw min/max; a real figure keeps its tonal range after shrinking.
+    Cheap and dependency-free."""
+    try:
+        small = fitz.Pixmap(pix, 0)  # no-alpha copy, safe to shrink in place
+        n = 0
+        while small.width > 48 and small.height > 48 and n < 8:
+            small.shrink(1)
+            n += 1
+        s = small.samples
+        return bool(s) and (max(s) - min(s) < 16)
+    except Exception:
+        return False
+
+
 @transient()
 def _detect_page_diagrams(page, ctx=None) -> list[bytes]:
     """Vision-detect real diagrams on a scanned PDF page and return
@@ -244,6 +263,8 @@ def _detect_page_diagrams(page, ctx=None) -> list[bytes]:
         try:
             pix = page.get_pixmap(dpi=150, clip=clip)
             if pix.width < 80 or pix.height < 80:
+                continue
+            if _is_blank_pixmap(pix):
                 continue
             out.append(pix.tobytes("png"))
         except Exception:
@@ -846,6 +867,11 @@ def extract_page_images(file_bytes: bytes, filename: str,
                     continue
                 if pix.n - pix.alpha > 3:  # CMYK -> convert to RGB
                     pix = fitz.Pixmap(fitz.csRGB, pix)
+                # Drop degenerate image-masks / alpha layers that render as a
+                # solid black box (they pass the size check but are not figures).
+                if _is_blank_pixmap(pix):
+                    pix = None
+                    continue
                 png = pix.tobytes("png")
                 out.setdefault(page_no, []).append(png)
                 pix = None
