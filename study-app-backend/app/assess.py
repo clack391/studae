@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
-from .clients import claude, STYLE_RULES, supabase, track_claude
-from .permissions import require_assessment, require_document
+from .clients import STYLE_RULES, supabase, track_claude
+from .permissions import require_document
 
 log = logging.getLogger(__name__)
 

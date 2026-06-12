@@ -9,11 +9,10 @@ from fastapi import HTTPException
 
 from .assess import (
     _resolve_source_chunks,
-    _resolve_sources,
     document_text_sample,
     extract_json,
 )
-from .clients import claude, STYLE_RULES, supabase, track_claude
+from .clients import STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
 

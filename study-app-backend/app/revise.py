@@ -4,7 +4,7 @@ from .assess import (
     extract_json,
     time_from_questions,
 )
-from .clients import claude, STYLE_RULES, supabase, track_claude
+from .clients import STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
 

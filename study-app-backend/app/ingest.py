@@ -2,11 +2,12 @@ import io
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import fitz  # pymupdf
 from google.genai import types
 
-from .clients import ANTI_INJECTION, claude, gemini, STYLE_RULES, supabase, track_claude, track_gemini, track_gemini_embed
+from .clients import ANTI_INJECTION, STYLE_RULES, supabase, track_claude, track_gemini, track_gemini_embed
 from .retry import QuotaExhausted, transient
 
 log = logging.getLogger(__name__)
@@ -248,6 +249,12 @@ def _detect_page_diagrams(page, ctx=None) -> list[bytes]:
         except Exception:
             continue
     return out
+
+
+# How many scanned pages to OCR concurrently. Per-page Gemini OCR was the slow,
+# serial part of ingest on scanned PDFs. PyMuPDF rendering stays single-threaded
+# (it is not thread-safe); only these network OCR calls are parallelized.
+OCR_PAGE_CONCURRENCY = 8
 
 
 @transient()
@@ -584,7 +591,7 @@ def _chapter_range_from_text(doc, n: int) -> tuple[int, int] | None:
         if not text:
             continue
         page_no = i + 1
-        nums = [m for m in (_line_chapter_number(l) for l in text.splitlines())
+        nums = [m for m in (_line_chapter_number(ln) for ln in text.splitlines())
                 if m is not None]
         if len(set(nums)) >= _TOC_PAGE_DISTINCT_CHAPTERS:
             continue
@@ -713,21 +720,45 @@ def extract_pages(file_bytes: bytes, filename: str,
         hi = min(total, page_range[1])
     else:
         lo, hi = 1, total
-    pages = []
+    pages: list[tuple[int, str]] = []
     ocr_page_numbers: set[int] = set()
+    # First pass (single-threaded — PyMuPDF is not thread-safe per document):
+    # take native text where present, otherwise render the page to PNG and
+    # queue it for OCR. Rendering is local CPU; only the slow Gemini OCR runs
+    # concurrently below.
+    to_ocr: list[tuple[int, bytes]] = []
     for i, page in enumerate(doc):
         page_no = i + 1
         if page_no < lo or page_no > hi:
             continue
-        if doc_id is not None and (page_no == lo or page_no % 5 == 0 or page_no == hi):
-            _set_progress(doc_id, f"reading page {page_no} of {total}")
         direct = page.get_text()
         if len(direct.strip()) >= PAGE_TEXT_THRESHOLD:
             pages.append((page_no, direct))
         else:
-            img = page.get_pixmap(dpi=150).tobytes("png")
-            pages.append((page_no, read_image(img, ctx={"doc_id": doc_id})))
-            ocr_page_numbers.add(page_no)
+            to_ocr.append((page_no, page.get_pixmap(dpi=150).tobytes("png")))
+
+    # Concurrent OCR: the per-page Gemini call was the slow, serial part of
+    # ingest on scanned PDFs. Run several at once (usage log is lock-guarded,
+    # each call is independent, @transient retries any 429s). Pages may finish
+    # out of order, so document order is restored by the sort below.
+    if to_ocr:
+        if doc_id is not None:
+            _set_progress(doc_id, f"reading {len(to_ocr)} pages")
+        done = 0
+        with ThreadPoolExecutor(
+            max_workers=min(OCR_PAGE_CONCURRENCY, len(to_ocr))
+        ) as ex:
+            futs = {ex.submit(read_image, img, ctx={"doc_id": doc_id}): pn
+                    for pn, img in to_ocr}
+            for fut in as_completed(futs):
+                pn = futs[fut]
+                pages.append((pn, fut.result()))
+                ocr_page_numbers.add(pn)
+                done += 1
+                if doc_id is not None and (done == 1 or done % 5 == 0
+                                           or done == len(to_ocr)):
+                    _set_progress(doc_id, f"read {done} of {len(to_ocr)} pages")
+        pages.sort(key=lambda p: p[0])
 
     # source_type is decided over the pages we actually processed (the
     # restricted span for a chapter), matching the whole-doc behavior.
@@ -907,6 +938,14 @@ def classify_content_type(text: str) -> str:
     if any(m in text for m in math_markers) or text.count("$") >= 4:
         return "math"
     return "text"
+
+
+# How many pages to embed concurrently during ingest. Each page is one Gemini
+# round-trip; embedding pages in parallel (instead of one-after-another) is the
+# main ingest speed-up. Embeds are independent and the usage log is lock-guarded,
+# so this is safe. Keep modest to stay within Gemini embedding rate limits
+# (@transient retries any 429s).
+EMBED_PAGE_CONCURRENCY = 8
 
 
 @transient()
@@ -1105,6 +1144,34 @@ def ingest_document(user_id: str, doc_id: str, files: list[tuple[bytes, str]],
         total_pages = len(pages)
         chunk_index = 0  # running display index only — NOT an idempotency key
 
+        # Embed every not-yet-written page CONCURRENTLY before the write loop.
+        # Each embed_many is a Gemini network round-trip; doing them one page at
+        # a time was the slow part of ingest. Embeds are independent and the
+        # usage log is lock-guarded, so a small thread pool is safe. The write
+        # loop below stays sequential and ordered so resume/idempotency (the
+        # per-page delete+insert and ingest_cursor) are unchanged.
+        emb_by_page: dict[int, list[list[float]]] = {}
+        pending: list[tuple[int, list[str]]] = []
+        for pn, pt in pages:
+            if pn <= cursor:
+                continue
+            pchunks = chunk_page_text(pt)
+            if pchunks:
+                pending.append((pn, pchunks))
+        if pending:
+            _set_progress(doc_id, f"embedding {len(pending)} pages")
+            with ThreadPoolExecutor(
+                max_workers=min(EMBED_PAGE_CONCURRENCY, len(pending))
+            ) as ex:
+                futs = {ex.submit(embed_many, chunks, ctx): pn
+                        for pn, chunks in pending}
+                for fut in as_completed(futs):
+                    emb_by_page[futs[fut]] = fut.result()
+
+        # Reused across pages: the orphan-figure placeholder embeds to the same
+        # vector every time (it is never used for search), so compute it once.
+        placeholder_emb: list[float] | None = None
+
         for page_num, page_text in pages:
             if page_num <= cursor:
                 # Account for already-written chunks so the running display
@@ -1112,7 +1179,7 @@ def ingest_document(user_id: str, doc_id: str, files: list[tuple[bytes, str]],
                 chunk_index += len(chunk_page_text(page_text))
                 continue
 
-            _set_progress(doc_id, f"embedding page {page_num} of {total_pages}")
+            _set_progress(doc_id, f"saving page {page_num} of {total_pages}")
 
             page_chunks = chunk_page_text(page_text)
 
@@ -1145,8 +1212,11 @@ def ingest_document(user_id: str, doc_id: str, files: list[tuple[bytes, str]],
                     log.exception("figure image upload failed for page=%s "
                                   "doc_id=%s", page_num, doc_id)
 
-            # Batched embedding: every chunk on this page in ONE call.
-            embeddings = embed_many(page_chunks, ctx=ctx)
+            # Embeddings were computed concurrently above. Fall back to an
+            # inline call only if a page somehow was not pre-embedded.
+            embeddings = emb_by_page.get(page_num)
+            if embeddings is None:
+                embeddings = embed_many(page_chunks, ctx=ctx) if page_chunks else []
 
             # Build this page's chunk rows. Each text chunk claims the next
             # figure on the page in order (figure_cursor); leftover figures
@@ -1179,7 +1249,8 @@ def ingest_document(user_id: str, doc_id: str, files: list[tuple[bytes, str]],
             # while staying out of vector search. These belong to THIS
             # page's batch, so re-ingesting the page rewrites them too.
             if figure_cursor < len(figure_paths):
-                placeholder_emb = embed("figure", ctx=ctx)
+                if placeholder_emb is None:
+                    placeholder_emb = embed("figure", ctx=ctx)
                 for fp in figure_paths[figure_cursor:]:
                     rows.append({
                         "document_id": doc_id,

@@ -5,8 +5,8 @@ import re
 from fastapi import HTTPException
 
 from .billing import LimitError, check_and_count
-from .clients import ANTI_INJECTION, claude, STYLE_RULES, supabase, track_claude
-from .ingest import embed, read_image
+from .clients import ANTI_INJECTION, STYLE_RULES, supabase, track_claude
+from .ingest import embed
 from .permissions import require_session
 
 log = logging.getLogger(__name__)
