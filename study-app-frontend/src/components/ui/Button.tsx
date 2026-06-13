@@ -53,6 +53,11 @@ export function Button({
     color: txtColor,
     lineHeight: Math.round(dims.fs * 1.4),
     paddingBottom: 2,
+    // Bound the text width inside the row so a long label shrinks to fit on
+    // one line (see numberOfLines + adjustsFontSizeToFit below) instead of
+    // overflowing and clipping its last word.
+    flexShrink: 1,
+    textAlign: 'center',
   };
 
   return (
@@ -65,7 +70,11 @@ export function Button({
       style={({ pressed }) => [box, pressed && { opacity: 0.85 }, style]}
     >
       {leftIcon}
-      <T style={txtStyle}>{label}</T>
+      {/* Auto-shrink an over-long label to one line rather than clipping it.
+          Labels that already fit are unaffected. */}
+      <T style={txtStyle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+        {label}
+      </T>
     </Pressable>
   );
 }

@@ -112,7 +112,7 @@ export default function Result() {
         </Card>
 
         <Button
-          label="Review every answer"
+          label="Review answers"
           kind="pri"
           block
           onPress={() => router.push({ pathname: '/test/review/[id]', params: { id: id! } })}
