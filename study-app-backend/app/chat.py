@@ -4,6 +4,7 @@ import re
 
 from fastapi import HTTPException
 
+from . import config
 from .billing import LimitError, check_and_count
 from .clients import ANTI_INJECTION, STYLE_RULES, supabase, track_claude
 from .ingest import embed
@@ -307,7 +308,7 @@ def _ai_filter_sources(topic: str, lesson_excerpt: str, sources: list) -> list:
     try:
         raw = track_claude(
             "ai_filter_sources",
-            model="claude-haiku-4-5",
+            model=config.ASK_FILTER_SOURCES,
             max_tokens=200,
             messages=[{"role": "user", "content": prompt}],
         ).content[0].text
@@ -581,7 +582,7 @@ def _haiku_vision_filter_photo_sources(
     try:
         raw = track_claude(
             "photo_ask_figure_filter",
-            model="claude-haiku-4-5",
+            model=config.ASK_PHOTO_FIGURE_FILTER,
             max_tokens=200,
             messages=[{"role": "user", "content": content}],
         ).content[0].text
@@ -740,7 +741,7 @@ def _drop_irrelevant_lesson_figures(
     try:
         raw = track_claude(
             "lesson_figure_filter",
-            model="claude-haiku-4-5",
+            model=config.LESSON_FIGURE_FILTER,
             max_tokens=400,
             messages=[{"role": "user", "content": content}],
         ).content[0].text
@@ -909,7 +910,7 @@ def _tag_question_with_topic(question: str, outline_text: str,
     try:
         raw = track_claude(
             "tag_question_topic",
-            model="claude-haiku-4-5",
+            model=config.ASK_TAG_TOPIC,
             max_tokens=120,
             messages=[{"role": "user", "content": prompt}],
         ).content[0].text
@@ -965,7 +966,7 @@ def _extract_questions_from_photo(image_b64: str, media_type: str,
     try:
         raw = track_claude(
             "extract_questions_from_photo",
-            model="claude-haiku-4-5",
+            model=config.ASK_EXTRACT_PHOTO,
             max_tokens=1500,
             messages=[{
                 "role": "user",
@@ -1259,7 +1260,7 @@ def answer_photo_question(user_id, session_id, document_id,
     # here if Pro-level multi-step reasoning starts feeling thin.
     reply = track_claude(
         "answer_photo_question",
-        model="claude-haiku-4-5",
+        model=config.ASK_PHOTO,
         max_tokens=max_tokens,
         system=system,
         messages=msgs,
@@ -1680,7 +1681,7 @@ def answer_question(user_id, session_id, document_id, question, level):
     # questions, especially at Pro level.
     reply = track_claude(
         "answer_question",
-        model="claude-haiku-4-5",
+        model=config.ASK,
         max_tokens=1500,
         system=system,
         messages=msgs,
@@ -1774,7 +1775,7 @@ def summarize_topic(user_id, document_id, topic, level):
     # points or feel surface-level.
     summary = track_claude(
         "summarize_topic",
-        model="claude-haiku-4-5",
+        model=config.SUMMARY,
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
@@ -1795,7 +1796,7 @@ def summarize_outline(document_id, level):
     # summarize_topic. Flip back to claude-sonnet-4-6 here if needed.
     summary = track_claude(
         "summarize_outline",
-        model="claude-haiku-4-5",
+        model=config.SUMMARY,
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
@@ -1921,7 +1922,7 @@ def teach_next(user_id, session_id):
     # claude-sonnet-4-6 here if professional-level lessons feel thin.
     lesson = track_claude(
         "generate_lesson",
-        model="claude-haiku-4-5",
+        model=config.LESSON,
         max_tokens=1500,
         system=system,
         messages=[{"role": "user", "content": user_msg}],

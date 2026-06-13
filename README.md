@@ -58,11 +58,11 @@ cd ../study-app-frontend && npm install
 
 ```bash
 # Terminal 1: backend
-cd study-app-backend
+cd Studae/study-app-backend
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # Terminal 2: frontend
-cd study-app-frontend
+cd Studae/study-app-frontend
 npx expo start --clear
 ```
 

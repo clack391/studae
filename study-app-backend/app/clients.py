@@ -1,15 +1,19 @@
+import base64
 import json
 import logging
 import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 from dotenv import load_dotenv
 from supabase import create_client
 import anthropic
 from google import genai
+
+from . import config
 
 # Force every httpx.Client we create (including the ones supabase-py builds
 # internally for postgrest / storage / auth) to use HTTP/1.1, not HTTP/2.
@@ -79,16 +83,23 @@ _log = logging.getLogger("usage")
 
 # Public Anthropic / Google pricing in dollars per 1M tokens. Update if
 # pricing changes. Unknown models log token counts but $0 cost.
+# Keyed by the model ids defined in config.py so prices stay in sync with the
+# models features actually use. If you point a feature at a model not listed
+# here, add its price (otherwise its cost logs as $0).
 _PRICING = {
     # Anthropic Claude
-    "claude-sonnet-4-6":       {"in": 3.00,  "out": 15.00},
-    "claude-haiku-4-5":        {"in": 1.00,  "out":  5.00},
+    config.CLAUDE_SONNET:      {"in": 3.00,  "out": 15.00},
+    config.CLAUDE_HAIKU:       {"in": 1.00,  "out":  5.00},
     "claude-opus-4-7":         {"in": 15.00, "out": 75.00},
-    "claude-opus-4-8":         {"in": 15.00, "out": 75.00},
+    config.CLAUDE_OPUS:        {"in": 15.00, "out": 75.00},
     # Google Gemini
-    "gemini-2.5-flash-lite":   {"in": 0.10,  "out":  0.40},
-    "gemini-2.5-flash":        {"in": 0.30,  "out":  2.50},
-    "gemini-embedding-001":    {"in": 0.15,  "out":  0.00},
+    config.GEMINI_FLASH_LITE:  {"in": 0.10,  "out":  0.40},
+    config.GEMINI_FLASH:       {"in": 0.30,  "out":  2.50},
+    config.GEMINI_EMBED:       {"in": 0.15,  "out":  0.00},
+    # OpenAI (used only if a feature in config.py points at one)
+    config.OPENAI_GPT:         {"in": 2.50,  "out": 10.00},
+    config.OPENAI_GPT_MINI:    {"in": 0.15,  "out":  0.60},
+    config.OPENAI_EMBED:       {"in": 0.02,  "out":  0.00},
 }
 
 _USAGE_FILE = Path(__file__).resolve().parent.parent / "data" / "usage.jsonl"
@@ -133,61 +144,243 @@ def _record_usage(step: str, model: str, input_tokens: int, output_tokens: int, 
         _log.warning("usage log write failed: %s: %s", type(e).__name__, e)
 
 
-def track_claude(step: str, ctx=None, **kwargs):
-    """Wrap claude.messages.create() with usage tracking. Same signature
-    and return value as the underlying call; the response is unchanged.
-    Optional ctx (dict with "doc_id"/"session_id") tags the usage line."""
-    resp = claude.messages.create(**kwargs)
-    try:
-        usage = getattr(resp, "usage", None)
-        if usage is not None:
-            _record_usage(
-                step,
-                kwargs.get("model", "unknown"),
-                int(getattr(usage, "input_tokens", 0) or 0),
-                int(getattr(usage, "output_tokens", 0) or 0),
-                ctx=ctx,
+# ===================== PROVIDER ROUTING ====================================
+# Each feature in config.py names a model id; the provider is inferred from that
+# name so a feature can point at Claude, Gemini, or OpenAI and "just work".
+# The native paths (Claude via track_claude, Gemini via track_gemini /
+# track_gemini_embed) are kept byte-for-byte identical to before — only a
+# non-native model id triggers the translation/adapter code below.
+
+_openai_client = None
+
+
+def _openai():
+    """Lazily build the OpenAI client (only needed if a feature points at a
+    gpt-*/o* model). Raises a clear error if the key is missing."""
+    global _openai_client
+    if _openai_client is None:
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "A feature in config.py points at an OpenAI model but "
+                "OPENAI_API_KEY is not set in the environment."
             )
-    except Exception as e:
-        _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
-    return resp
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=key)
+    return _openai_client
+
+
+def provider_of(model: str) -> str:
+    """Map a model id to its provider from the name prefix."""
+    m = (model or "").lower()
+    if m.startswith(("claude", "anthropic")):
+        return "anthropic"
+    if m.startswith(("gemini", "models/gemini")):
+        return "google"
+    if m.startswith(("gpt", "o1", "o3", "o4", "chatgpt", "text-embedding")):
+        return "openai"
+    raise ValueError(
+        f"Unknown model provider for '{model}'. Add its name prefix to "
+        "clients.provider_of()."
+    )
+
+
+# --- Normalise a provider-shaped request into neutral turns ----------------
+# A "turn" is {"role": "user"|"assistant", "parts": [...]}, where a part is
+# {"text": str} or {"image": bytes, "mime": str}. Plus an optional system str.
+
+def _neutral_from_anthropic(kwargs):
+    turns = []
+    for m in kwargs.get("messages", []) or []:
+        content = m.get("content")
+        parts = []
+        if isinstance(content, str):
+            parts.append({"text": content})
+        else:
+            for b in content or []:
+                if b.get("type") == "text":
+                    parts.append({"text": b.get("text", "")})
+                elif b.get("type") == "image":
+                    src = b.get("source", {})
+                    data = base64.b64decode(src.get("data", "")) \
+                        if src.get("type") == "base64" else b""
+                    parts.append({"image": data,
+                                  "mime": src.get("media_type", "image/png")})
+        turns.append({"role": m.get("role", "user"), "parts": parts})
+    return kwargs.get("system"), turns, kwargs.get("max_tokens", 2000)
+
+
+def _neutral_from_gemini(kwargs):
+    cfg = kwargs.get("config") or {}
+    system = cfg.get("system_instruction") if isinstance(cfg, dict) else None
+    max_tokens = cfg.get("max_output_tokens", 4000) if isinstance(cfg, dict) else 4000
+    contents = kwargs.get("contents")
+    items = contents if isinstance(contents, list) else [contents]
+    parts = []
+    for it in items:
+        if isinstance(it, str):
+            parts.append({"text": it})
+        else:
+            inline = getattr(it, "inline_data", None)
+            if inline is not None and getattr(inline, "data", None):
+                parts.append({"image": inline.data,
+                              "mime": getattr(inline, "mime_type", "image/png")})
+            elif getattr(it, "text", None):
+                parts.append({"text": it.text})
+    return system, [{"role": "user", "parts": parts}], max_tokens
+
+
+# --- Call a provider with neutral turns, return (text, in_tokens, out_tokens)
+
+def _call_anthropic(model, system, turns, max_tokens):
+    msgs = []
+    for t in turns:
+        content = []
+        for p in t["parts"]:
+            if "text" in p:
+                content.append({"type": "text", "text": p["text"]})
+            else:
+                content.append({"type": "image", "source": {
+                    "type": "base64", "media_type": p["mime"],
+                    "data": base64.b64encode(p["image"]).decode()}})
+        msgs.append({"role": t["role"], "content": content})
+    kw = {"model": model, "max_tokens": max_tokens or 2000, "messages": msgs}
+    if system:
+        kw["system"] = system
+    resp = claude.messages.create(**kw)
+    text = resp.content[0].text if getattr(resp, "content", None) else ""
+    u = getattr(resp, "usage", None)
+    return text, int(getattr(u, "input_tokens", 0) or 0), int(getattr(u, "output_tokens", 0) or 0)
+
+
+def _call_google(model, system, turns, max_tokens):
+    from google.genai import types as gt
+    contents = []
+    for t in turns:
+        gparts = []
+        for p in t["parts"]:
+            if "text" in p:
+                gparts.append(gt.Part.from_text(text=p["text"]))
+            else:
+                gparts.append(gt.Part.from_bytes(data=p["image"], mime_type=p["mime"]))
+        contents.append(gt.Content(
+            role="model" if t["role"] == "assistant" else "user", parts=gparts))
+    cfg = gt.GenerateContentConfig(
+        max_output_tokens=max_tokens or 4000,
+        system_instruction=system or None,
+    )
+    resp = gemini.models.generate_content(model=model, contents=contents, config=cfg)
+    u = getattr(resp, "usage_metadata", None)
+    return (resp.text or ""), int(getattr(u, "prompt_token_count", 0) or 0), \
+        int(getattr(u, "candidates_token_count", 0) or 0)
+
+
+def _call_openai(model, system, turns, max_tokens):
+    msgs = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    for t in turns:
+        parts = []
+        for p in t["parts"]:
+            if "text" in p:
+                parts.append({"type": "text", "text": p["text"]})
+            else:
+                b64 = base64.b64encode(p["image"]).decode()
+                parts.append({"type": "image_url", "image_url": {
+                    "url": f"data:{p['mime']};base64,{b64}"}})
+        content = parts[0]["text"] if (len(parts) == 1 and "text" in parts[0]) else parts
+        msgs.append({"role": t["role"], "content": content})
+    resp = _openai().chat.completions.create(
+        model=model, messages=msgs, max_tokens=max_tokens or 2000)
+    u = getattr(resp, "usage", None)
+    return (resp.choices[0].message.content or ""), \
+        int(getattr(u, "prompt_tokens", 0) or 0), int(getattr(u, "completion_tokens", 0) or 0)
+
+
+_TEXT_CALLERS = {
+    "anthropic": _call_anthropic,
+    "google": _call_google,
+    "openai": _call_openai,
+}
+
+
+def track_claude(step: str, ctx=None, **kwargs):
+    """Run a text/vision completion, tracking usage. Native Claude path is
+    unchanged; if config points this feature at a Gemini/OpenAI model, the
+    Anthropic-style request is translated to that provider and the response is
+    wrapped so call sites (`.content[0].text`) keep working."""
+    model = kwargs.get("model", "unknown")
+    if provider_of(model) == "anthropic":
+        resp = claude.messages.create(**kwargs)
+        try:
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                _record_usage(step, model,
+                              int(getattr(usage, "input_tokens", 0) or 0),
+                              int(getattr(usage, "output_tokens", 0) or 0), ctx=ctx)
+        except Exception as e:
+            _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
+        return resp
+    system, turns, max_tokens = _neutral_from_anthropic(kwargs)
+    text, in_t, out_t = _TEXT_CALLERS[provider_of(model)](model, system, turns, max_tokens)
+    _record_usage(step, model, in_t, out_t, ctx=ctx)
+    return SimpleNamespace(
+        content=[SimpleNamespace(text=text)],
+        usage=SimpleNamespace(input_tokens=in_t, output_tokens=out_t))
 
 
 def track_gemini(step: str, ctx=None, **kwargs):
-    """Wrap gemini.models.generate_content() with usage tracking. Same
-    signature and return value as the underlying call. Optional ctx (dict
-    with "doc_id"/"session_id") tags the usage line."""
-    resp = gemini.models.generate_content(**kwargs)
-    try:
-        usage = getattr(resp, "usage_metadata", None)
-        if usage is not None:
-            _record_usage(
-                step,
-                kwargs.get("model", "unknown"),
-                int(getattr(usage, "prompt_token_count", 0) or 0),
-                int(getattr(usage, "candidates_token_count", 0) or 0),
-                ctx=ctx,
-            )
-    except Exception as e:
-        _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
-    return resp
+    """Run a text/vision completion, tracking usage. Native Gemini path is
+    unchanged; if config points this feature at a Claude/OpenAI model, the
+    Gemini-style request is translated and the response wrapped so call sites
+    (`.text`) keep working."""
+    model = kwargs.get("model", "unknown")
+    if provider_of(model) == "google":
+        resp = gemini.models.generate_content(**kwargs)
+        try:
+            usage = getattr(resp, "usage_metadata", None)
+            if usage is not None:
+                _record_usage(step, model,
+                              int(getattr(usage, "prompt_token_count", 0) or 0),
+                              int(getattr(usage, "candidates_token_count", 0) or 0), ctx=ctx)
+        except Exception as e:
+            _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
+        return resp
+    system, turns, max_tokens = _neutral_from_gemini(kwargs)
+    text, in_t, out_t = _TEXT_CALLERS[provider_of(model)](model, system, turns, max_tokens)
+    _record_usage(step, model, in_t, out_t, ctx=ctx)
+    return SimpleNamespace(
+        text=text,
+        usage_metadata=SimpleNamespace(prompt_token_count=in_t, candidates_token_count=out_t))
 
 
 def track_gemini_embed(step: str, ctx=None, **kwargs):
-    """Wrap gemini.models.embed_content() — embeddings have no output
-    tokens, but input tokens still matter for cost tracking. Optional ctx
-    (dict with "doc_id"/"session_id") tags the usage line."""
-    resp = gemini.models.embed_content(**kwargs)
-    try:
-        usage = getattr(resp, "usage_metadata", None)
-        if usage is not None:
-            _record_usage(
-                step,
-                kwargs.get("model", "unknown"),
-                int(getattr(usage, "prompt_token_count", 0) or 0),
-                0,
-                ctx=ctx,
-            )
-    except Exception as e:
-        _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
-    return resp
+    """Embed text, tracking usage. Native Gemini path is unchanged; OpenAI
+    embedding models are supported too. Anthropic has no embeddings API."""
+    model = kwargs.get("model", "unknown")
+    prov = provider_of(model)
+    if prov == "google":
+        resp = gemini.models.embed_content(**kwargs)
+        try:
+            usage = getattr(resp, "usage_metadata", None)
+            if usage is not None:
+                _record_usage(step, model,
+                              int(getattr(usage, "prompt_token_count", 0) or 0),
+                              0, ctx=ctx)
+        except Exception as e:
+            _log.warning("usage extract failed: %s: %s", type(e).__name__, e)
+        return resp
+    if prov == "anthropic":
+        raise RuntimeError(
+            "Anthropic/Claude has no embeddings API. Point config.EMBED at a "
+            "Gemini or OpenAI embedding model.")
+    # OpenAI embeddings. Note: switching embedding model/provider changes the
+    # vector space, so existing chunks must be re-embedded and the model must
+    # output 1536 dims to match the DB column (e.g. text-embedding-3-small).
+    contents = kwargs.get("contents")
+    texts = contents if isinstance(contents, list) else [contents]
+    resp = _openai().embeddings.create(model=model, input=texts)
+    u = getattr(resp, "usage", None)
+    _record_usage(step, model, int(getattr(u, "prompt_tokens", 0) or 0), 0, ctx=ctx)
+    return SimpleNamespace(
+        embeddings=[SimpleNamespace(values=d.embedding) for d in resp.data])

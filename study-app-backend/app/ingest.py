@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import fitz  # pymupdf
 from google.genai import types
 
+from . import config
 from .clients import ANTI_INJECTION, STYLE_RULES, supabase, track_claude, track_gemini, track_gemini_embed
 from .retry import QuotaExhausted, transient
 
@@ -42,8 +43,8 @@ OUTLINE_PROMPT = (
     "\n\n"
 )
 
-MODEL_FAST = "gemini-2.5-flash-lite"
-MODEL_STRONG = "gemini-2.5-flash"
+# Model selection lives in config.py (config.OCR, config.OCR_HANDWRITING,
+# config.DIAGRAM_DETECT, config.EMBED, config.OUTLINE).
 
 # Image extensions handled by the Gemini OCR path. Anything else routes to
 # the format-specific text extractors (.docx/.pptx/.txt/.md) or PyMuPDF (.pdf).
@@ -202,7 +203,7 @@ def _detect_page_diagrams(page, ctx=None) -> list[bytes]:
     try:
         resp = track_gemini(
             "detect_page_diagrams",
-            model=MODEL_FAST,
+            model=config.DIAGRAM_DETECT,
             contents=[
                 types.Part.from_bytes(data=page_png, mime_type="image/png"),
                 DIAGRAM_DETECT_PROMPT,
@@ -279,7 +280,7 @@ OCR_PAGE_CONCURRENCY = 8
 
 
 @transient()
-def read_image(img_bytes: bytes, model: str = MODEL_FAST, ctx=None) -> str:
+def read_image(img_bytes: bytes, model: str = config.OCR, ctx=None) -> str:
     """OCR an image with Gemini Vision. The mime type is sniffed from the
     image's leading magic bytes (jpg/webp/heic/...), defaulting to image/png
     for PDF page renders and crops."""
@@ -299,7 +300,7 @@ def read_image(img_bytes: bytes, model: str = MODEL_FAST, ctx=None) -> str:
 
 def read_image_strong(img_bytes: bytes) -> str:
     """For handwriting and heavy math — uses gemini-2.5-flash, not flash-lite."""
-    return read_image(img_bytes, model=MODEL_STRONG)
+    return read_image(img_bytes, model=config.OCR_HANDWRITING)
 
 
 PAGE_TEXT_THRESHOLD = 200  # chars per page that count as "real text"
@@ -978,7 +979,7 @@ EMBED_PAGE_CONCURRENCY = 8
 def embed(text: str, ctx=None) -> list[float]:
     res = track_gemini_embed(
         "embed_chunk",
-        model="gemini-embedding-001",
+        model=config.EMBED,
         contents=text,
         config={"output_dimensionality": 1536},
         ctx=ctx,
@@ -1000,7 +1001,7 @@ def embed_many(texts: list[str], ctx=None) -> list[list[float]]:
         return []
     res = track_gemini_embed(
         "embed_chunk",
-        model="gemini-embedding-001",
+        model=config.EMBED,
         contents=texts,
         config={"output_dimensionality": 1536},
         ctx=ctx,
@@ -1015,7 +1016,7 @@ def build_outline(text: str, ctx=None) -> str:
     # outlines start missing topics or grouping unrelated sections.
     msg = track_claude(
         "build_outline",
-        model="claude-haiku-4-5",
+        model=config.OUTLINE,
         max_tokens=2000,
         messages=[{"role": "user", "content": OUTLINE_PROMPT + text[:50000] + ANTI_INJECTION + STYLE_RULES}],
         ctx=ctx,

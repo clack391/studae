@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 
+from . import config
 from .clients import STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
@@ -511,7 +512,7 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
     max_tokens = min(32000, 1500 + 600 * num)
     raw = track_claude(
         "generate_questions",
-        model="claude-sonnet-4-6",
+        model=config.ASSESSMENT_GENERATE,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
@@ -713,7 +714,7 @@ def _haiku_vision_figure_matches(q: dict, figure_chunks: list) -> bool:
         try:
             raw = track_claude(
                 "vision_verify_figure",
-                model="claude-haiku-4-5",
+                model=config.ASSESSMENT_FIGURE_VERIFY,
                 max_tokens=120,
                 messages=[{
                     "role": "user",
@@ -845,7 +846,7 @@ def _haiku_vision_filter_review_figures(results: list[dict]) -> None:
     try:
         raw = track_claude(
             "review_figure_filter",
-            model="claude-haiku-4-5",
+            model=config.REVIEW_FIGURE_FILTER,
             max_tokens=200,
             messages=[{"role": "user", "content": content}],
         ).content[0].text
@@ -920,7 +921,7 @@ def _regenerate_text_only_question(original, source, fmt, level, kind, topic):
     try:
         raw = track_claude(
             "regenerate_text_only_question",
-            model="claude-sonnet-4-6",
+            model=config.ASSESSMENT_REGEN_TEXT_ONLY,
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         ).content[0].text
@@ -1183,7 +1184,7 @@ def _verify_test_figures(questions_with_figures):
     try:
         raw = track_claude(
             "test_figure_batch_verify",
-            model="claude-haiku-4-5",
+            model=config.ASSESSMENT_FIGURE_VERIFY,
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         ).content[0].text
@@ -1415,7 +1416,7 @@ def grade_theory(q, student_answer, extracted_work=None):
     )
     raw = track_claude(
         "grade_answer",
-        model="claude-sonnet-4-6",
+        model=config.GRADING,
         max_tokens=800,
         temperature=0,
         messages=[{"role": "user", "content": prompt}],

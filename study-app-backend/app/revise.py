@@ -4,6 +4,7 @@ from .assess import (
     extract_json,
     time_from_questions,
 )
+from . import config
 from .clients import STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
@@ -64,7 +65,7 @@ def create_practice(user_id, document_id, level, num=None, time_limit=None):
     # feel shallow or repetitive vs the previous Sonnet output.
     raw = track_claude(
         "revise_weak_areas",
-        model="claude-haiku-4-5", max_tokens=4000,
+        model=config.REVISION, max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
     questions = extract_json(raw)["questions"]

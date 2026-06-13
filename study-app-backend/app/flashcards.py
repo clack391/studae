@@ -12,6 +12,7 @@ from .assess import (
     document_text_sample,
     extract_json,
 )
+from . import config
 from .clients import STYLE_RULES, supabase, track_claude
 from .permissions import require_document
 
@@ -49,7 +50,7 @@ def generate_cards(user_id, document_id, num, level, focus_area_id=None):
     # Flip back to claude-sonnet-4-6 if quality dips.
     raw = track_claude(
         "generate_flashcards",
-        model="claude-haiku-4-5",
+        model=config.FLASHCARDS,
         max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
