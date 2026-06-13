@@ -12,7 +12,7 @@ import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
 import { Sources } from '@/components/ui/Sources';
 import { Figure } from '@/components/ui/Figure';
-import { MD, hasMath } from '@/components/ui/MD';
+import { MD, hasMath, needsRichRender } from '@/components/ui/MD';
 import { T } from '@/components/ui/T';
 import { api } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
@@ -57,7 +57,7 @@ export default function ReviewAnswers() {
                 <Badge label={label} kind={badgeKind as any} />
                 {r.disputed ? <Badge label="Flagged" kind="out" /> : null}
               </Row>
-              {hasMath(r.question) ? <MD>{r.question}</MD> : <T v="bodyB">{r.question}</T>}
+              {needsRichRender(r.question) ? <MD>{r.question}</MD> : <T v="bodyB">{r.question}</T>}
               {(r.sources ?? [])
                 .filter((s) => !!s.figure_path)
                 .map((s) => (

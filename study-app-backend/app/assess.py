@@ -495,6 +495,15 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
         "the circuit and find…\"). When needs_figure=false, the "
         "question text must NOT mention any figure / image / diagram "
         "/ graph / chart / photo.\n"
+        "- OPTIONAL generated diagram: for a conceptual question where a small "
+        "diagram clarifies it AND the diagram is a type Mermaid can draw "
+        "accurately (flowchart, tree/mindmap, sequenceDiagram, timeline, or "
+        "xychart-beta) you MAY embed ONE Mermaid fenced code block directly "
+        "inside that question's \"question\" text. Keep needs_figure=false for "
+        "these (it is your own drawing, not an extracted image). Use it "
+        "sparingly and only when it truly helps. NEVER use Mermaid for geometry, "
+        "circuits, free-body diagrams, chemical structures, anatomy, or precise "
+        "graphs — those must use the book's own figure via needs_figure.\n"
         f"{explanation_rule}"
         "Return ONLY valid JSON, no other text, in this shape:\n"
         f"{shape_example}\n\n"
@@ -527,7 +536,50 @@ def generate_questions(source, chunk_ids, fmt, level, num, kind="test",
     # Hard cap even if the prompt is ignored. The student picked num and
     # that's what they get; over-generation produces a wrong score
     # denominator and burns review time.
-    return questions[:num]
+    return _verify_generated_diagrams(questions[:num])
+
+
+_MERMAID_BLOCK_RE = _re.compile(r"\n?```mermaid[\s\S]*?```\n?")
+
+
+def _verify_generated_diagrams(questions):
+    """Drop an AI-generated Mermaid diagram from a question when it does not hold
+    up: invalid Mermaid, factually wrong, or inconsistent with the question /
+    reference answer. The question text (minus the diagram) is kept so the
+    question still works. This only touches diagrams the model drew itself;
+    extracted book figures are handled by _verify_and_repair_figure_questions.
+    Verification failure (or any error) drops the diagram — the safe default on
+    a graded path."""
+    for q in questions:
+        text = (q or {}).get("question") or ""
+        if "```mermaid" not in text:
+            continue
+        prompt = (
+            "A test question contains an AI-generated Mermaid diagram. Decide if "
+            "it is safe to show with the question.\n"
+            "Keep it ONLY if ALL hold: it is valid Mermaid that will render; it "
+            "is factually correct; and it is consistent with the question and its "
+            "reference answer, so the question stays answerable.\n\n"
+            f"Question (with diagram):\n{text}\n\n"
+            f"Reference answer: {q.get('reference_answer') or q.get('correct_option') or ''}\n\n"
+            'Return ONLY JSON: {"keep": true or false}'
+            + STYLE_RULES
+        )
+        keep = False
+        try:
+            raw = track_claude(
+                "verify_generated_diagram",
+                model=config.ASSESSMENT_DIAGRAM_VERIFY,
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            ).content[0].text
+            keep = bool(extract_json(raw).get("keep"))
+        except Exception as e:
+            log.warning("generated-diagram verify failed, dropping: %s: %s",
+                        type(e).__name__, e)
+        if not keep:
+            q["question"] = _MERMAID_BLOCK_RE.sub(" ", text).strip()
+    return questions
 
 
 def _verify_and_repair_figure_questions(questions, source, chunk_ids, fmt,
@@ -1410,6 +1462,9 @@ def grade_theory(q, student_answer, extracted_work=None):
         f"Rubric: {json.dumps(q['rubric'])}\n"
         f"Total marks available: {q['points']}\n\n"
         f"Student answer: {work}\n\n"
+        "If a small diagram would make the explanation clearer, you may put ONE "
+        "Mermaid fenced code block (flowchart, mindmap, or xychart-beta; keep it "
+        "small and correct) INSIDE the reasoning string. Otherwise plain text.\n"
         'Return ONLY JSON: {"score": <number>, "reasoning": '
         '"<short why, referring to the rubric points>"}'
         + STYLE_RULES

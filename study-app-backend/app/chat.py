@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from . import config
 from .billing import LimitError, check_and_count
-from .clients import ANTI_INJECTION, STYLE_RULES, supabase, track_claude
+from .clients import ANTI_INJECTION, DIAGRAM_RULES, STYLE_RULES, supabase, track_claude
 from .ingest import embed
 from .permissions import require_session
 
@@ -1226,7 +1226,7 @@ def answer_photo_question(user_id, session_id, document_id,
         "came through; the document IS loaded. "
         + answer_format_clause + " "
         + LEVELS.get(level, LEVELS["novice"])
-        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES + DIAGRAM_RULES
         + outline_clause
     )
 
@@ -1605,7 +1605,7 @@ def answer_question(user_id, session_id, document_id, question, level):
         "In that case use the outline (when one is provided) plus the "
         "conversation history to answer as best you can. "
         + LEVELS.get(level, LEVELS["novice"])
-        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES + DIAGRAM_RULES
         + outline_block
     )
 
@@ -1769,7 +1769,7 @@ def summarize_topic(user_id, document_id, topic, level):
         topic=topic,
         level_hint=LEVELS.get(level, LEVELS["novice"]),
         context=context,
-    ) + STYLE_RULES
+    ) + STYLE_RULES + DIAGRAM_RULES
     # Haiku 4.5 for topic summaries: pure summarization at ~1/3 Sonnet
     # cost. Flip back to claude-sonnet-4-6 here if summaries miss key
     # points or feel surface-level.
@@ -1791,7 +1791,7 @@ def summarize_outline(document_id, level):
     prompt = SUMMARY_PROMPT_OUTLINE.format(
         outline=outline,
         level_hint=LEVELS.get(level, LEVELS["novice"]),
-    ) + STYLE_RULES
+    ) + STYLE_RULES + DIAGRAM_RULES
     # Haiku 4.5 for outline summaries. Same rationale as
     # summarize_topic. Flip back to claude-sonnet-4-6 here if needed.
     summary = track_claude(
@@ -1907,7 +1907,7 @@ def teach_next(user_id, session_id):
         "material provided. Teach only the current topic. Do not rush ahead "
         "or dump everything. Build on what the student has already covered. "
         + LEVELS.get(session["level"], LEVELS["novice"])
-        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES
+        + ANTI_INJECTION + FIGURE_NOTE + STYLE_RULES + DIAGRAM_RULES
     )
     user_msg = (
         f"Topics already covered:\n"

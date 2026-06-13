@@ -10,11 +10,21 @@ import { MathHTML } from './MathHTML';
 const MATH_RE =
   /\$\$[\s\S]+?\$\$|\$[^$\n]*[\\^_{}|][^$\n]*\$|\\[([]|\\(?:ce|frac|sqrt|sum|int|vec|begin|cdot|times|approx|alpha|beta|gamma|theta|lambda|mu|pi|sigma|omega|Delta|Omega)\b/;
 
+// A ```mermaid``` fenced block means there's a diagram to render in the WebView.
+const MERMAID_RE = /```mermaid/;
+
 // True when a string contains LaTeX/chemistry math. Lets callers (test
 // questions, MCQ options) keep their own styled <T> for plain text and only
 // switch to the math renderer when there's actually math to typeset.
 export function hasMath(s: string | null | undefined): boolean {
   return !!s && MATH_RE.test(s);
+}
+
+// True when content needs the rich WebView renderer (math OR a Mermaid diagram).
+// Exported so screens (test question / review) can decide whether to route a
+// field through MD instead of a plain styled <T>.
+export function needsRichRender(s: string | null | undefined): boolean {
+  return !!s && (MATH_RE.test(s) || MERMAID_RE.test(s));
 }
 
 // Tuned so lesson bodies, summaries, and grading reasoning read sharply on
@@ -49,7 +59,7 @@ function makeStyles(C: ReturnType<typeof useTheme>) {
 export function MD({ children }: { children: string }) {
   const C = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
-  if (children && MATH_RE.test(children)) {
+  if (children && needsRichRender(children)) {
     return <MathHTML>{children}</MathHTML>;
   }
   return <Markdown style={styles}>{children}</Markdown>;

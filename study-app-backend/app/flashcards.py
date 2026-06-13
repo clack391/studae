@@ -27,7 +27,11 @@ GENERATE_PROMPT = (
     "- Include 'source_chunks': the [chunk N] indices that back this card.\n\n"
     "Avoid yes/no questions and questions that contain their own answer. "
     "Spread the cards across the material; don't cluster them all on one "
-    "section.\n\n"
+    "section.\n"
+    "- OPTIONAL: when a small diagram captures the answer better than words and "
+    "Mermaid can draw it (flowchart, tree, mindmap, sequenceDiagram, or "
+    "timeline), you may put ONE Mermaid fenced code block inside the 'back'. "
+    "Only when it truly helps; keep it tiny.\n\n"
     "Return ONLY JSON: "
     '{{"cards":[{{"front":"...","back":"...","source_chunks":[0]}}]}}\n\n'
     "Material:\n{source}"

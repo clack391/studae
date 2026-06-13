@@ -73,6 +73,7 @@ SUMMARY = CLAUDE_HAIKU               # topic summary + outline summary
 ASSESSMENT_GENERATE = CLAUDE_SONNET         # write the questions
 ASSESSMENT_REGEN_TEXT_ONLY = CLAUDE_SONNET  # figure-question text-only fallback
 ASSESSMENT_FIGURE_VERIFY = CLAUDE_HAIKU     # vision-check a figure fits a question
+ASSESSMENT_DIAGRAM_VERIFY = CLAUDE_HAIKU    # check an AI-generated Mermaid diagram fits a question
 
 # --- Review / grading ---
 GRADING = CLAUDE_SONNET              # grade a submitted answer

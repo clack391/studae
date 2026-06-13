@@ -69,6 +69,7 @@ Expo Router file-based routing under `src/app/`. `tsconfig` aliases `@/*` → `s
 - `src/lib/supabase.ts` — single client, AsyncStorage session, autoRefreshToken on. `src/lib/theme.ts` — light/dark palettes via `useTheme()`; tokens originate from the design wireframe.
 - Data fetching is `@tanstack/react-query` (60s `staleTime`, 15min `gcTime`); writes invalidate keys directly.
 - UI primitives in `src/components/ui/` (e.g. `T`, `Button`, `Card`, `Screen`, `ConfirmSheet`). All confirmations use the custom `ConfirmSheet` — no system Material alerts anywhere.
+- **Rich content rendering** (`src/components/ui/MD.tsx` → `MathHTML.tsx`): markdown bodies render natively, but content with **LaTeX/chemistry math** (`$...$`, `$$...$$`, `\ce{}`) or a **```mermaid``` diagram** routes to `MathHTML`, a WebView running markdown-it + KaTeX + mhchem + Mermaid (CDN-loaded; Mermaid only when a diagram is present). It auto-sizes to content and matches the theme. The backend drives this: `clients.STYLE_RULES` tells models to emit `$...$`/`\ce{}` for math (everywhere), and `clients.DIAGRAM_RULES` tells them to emit a Mermaid diagram when it helps (Lessons + Ask; grading reasoning may include one inside its JSON `reasoning` field). TTS (`src/lib/tts.ts`) converts the same LaTeX/mhchem to speech. Test questions are NOT prompted to generate diagrams (a wrong diagram would break a graded question).
 
 ## Environment
 

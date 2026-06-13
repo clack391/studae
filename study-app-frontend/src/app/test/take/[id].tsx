@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Row } from '@/components/ui/Card';
 import { Loading } from '@/components/ui/Loading';
 import { Figure } from '@/components/ui/Figure';
-import { MD, hasMath } from '@/components/ui/MD';
+import { MD, needsRichRender } from '@/components/ui/MD';
 import { T } from '@/components/ui/T';
 import { api, ApiError } from '@/lib/api';
 import { useTheme } from '@/lib/theme';
@@ -194,7 +194,7 @@ export default function Take() {
       </View>
       <Screen>
         <Row top>
-          {hasMath(q.question_text) ? (
+          {needsRichRender(q.question_text) ? (
             <View style={{ flex: 1 }}><MD>{q.question_text}</MD></View>
           ) : (
             <T v="bodyB" style={{ flex: 1 }}>{q.question_text}</T>

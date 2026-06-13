@@ -1,5 +1,6 @@
 from .assess import (
     _resolve_source_chunks,
+    _verify_generated_diagrams,
     document_text_sample,
     extract_json,
     time_from_questions,
@@ -46,7 +47,12 @@ def create_practice(user_id, document_id, level, num=None, time_limit=None):
         "prefix — the app adds the letter label) and the correct option letter; "
         "for theory give a reference answer and a rubric of key points worth marks. "
         "For every question, include \"source_chunks\": a list of chunk indices "
-        "(the numbers in the [chunk N] markers) the question is based on.\n\n"
+        "(the numbers in the [chunk N] markers) the question is based on.\n"
+        "For a conceptual question where a small diagram helps AND Mermaid can "
+        "draw it accurately (flowchart, tree/mindmap, sequenceDiagram, timeline, "
+        "or xychart-beta, NOT geometry / circuits / structures / precise graphs), "
+        "you may embed ONE Mermaid fenced code block inside that question's "
+        "\"question\" text. Use it sparingly and only when it truly helps.\n\n"
         "Return ONLY valid JSON in this shape:\n"
         '{"questions":['
         '{"type":"objective","question":"...","options":["...","...","...","..."],'
@@ -69,6 +75,7 @@ def create_practice(user_id, document_id, level, num=None, time_limit=None):
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text
     questions = extract_json(raw)["questions"]
+    _verify_generated_diagrams(questions)  # drop any unsound AI-drawn diagrams
 
     if time_limit is None:
         time_limit = time_from_questions(questions)

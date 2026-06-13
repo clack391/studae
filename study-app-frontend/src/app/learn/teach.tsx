@@ -22,6 +22,19 @@ import { parseProgressText } from '@/lib/format';
 import { useTheme } from '@/lib/theme';
 import type { LessonNextResponse } from '@/lib/types';
 
+// The screen already shows the topic name as a heading, and the lesson body
+// often opens with its own "# Topic" title — which doubled it up. Strip a
+// leading markdown heading from the lesson when it just repeats the topic.
+function stripTopicHeading(lesson: string, topic: string): string {
+  const m = lesson.match(/^\s*#{1,6}\s+(.+?)\s*\n+/);
+  if (!m) return lesson;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+  const h = norm(m[1]);
+  const t = norm(topic || '');
+  if (t && (h === t || h.includes(t) || t.includes(h))) return lesson.slice(m[0].length);
+  return lesson;
+}
+
 export default function Teach() {
   const C = useTheme();
   const router = useRouter();
@@ -197,7 +210,7 @@ export default function Teach() {
                     caption={s.page_number != null ? `page ${s.page_number}` : undefined}
                   />
                 ))}
-                <MD>{data.lesson}</MD>
+                <MD>{stripTopicHeading(data.lesson, data.topic ?? '')}</MD>
                 {materialSources.length ? <Sources items={materialSources} /> : null}
               </>
             );

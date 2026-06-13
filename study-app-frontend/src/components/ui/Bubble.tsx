@@ -1,7 +1,7 @@
-import { View } from 'react-native';
+import { useWindowDimensions, View } from 'react-native';
 import { useTheme } from '@/lib/theme';
 import { T } from './T';
-import { MD } from './MD';
+import { MD, needsRichRender } from './MD';
 import { Sources } from './Sources';
 import { Figure } from './Figure';
 import type { Source } from '@/lib/types';
@@ -28,6 +28,13 @@ export function MeBubble({ text }: { text: string }) {
 
 export function AiBubble({ text, sources }: { text: string; sources?: Source[] }) {
   const C = useTheme();
+  const { width: winW } = useWindowDimensions();
+  // A math/diagram answer renders in a WebView, which needs a CONCRETE width.
+  // This bubble is content-sized (alignSelf flex-start + maxWidth), so a
+  // WebView with width:'100%' collapses to a sliver. Give rich content the
+  // bubble's usable width: window minus the chat list padding (14*2) and the
+  // bubble padding (12*2), capped at the 92% bubble max.
+  const richWidth = Math.floor((winW - 28) * 0.92) - 30;
   // Split the source list. figureSources renders as inline images; the
   // "from your material" card only shows entries with a real snippet so
   // page-expansion supplements (figure-only rows with empty snippets)
@@ -60,7 +67,11 @@ export function AiBubble({ text, sources }: { text: string; sources?: Source[] }
         gap: 9,
       }}
     >
-      <MD>{text}</MD>
+      {needsRichRender(text) ? (
+        <View style={{ width: richWidth }}><MD>{text}</MD></View>
+      ) : (
+        <MD>{text}</MD>
+      )}
       {figureSources.map((s) => (
         <Figure
           key={s.chunk_id}
