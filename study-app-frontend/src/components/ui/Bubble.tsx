@@ -1,5 +1,5 @@
 import { useWindowDimensions, View } from 'react-native';
-import { useTheme } from '@/lib/theme';
+import { bodyFont, useReadingFont, useTextScale, useTheme } from '@/lib/theme';
 import { T } from './T';
 import { MD, needsRichRender } from './MD';
 import { Sources } from './Sources';
@@ -7,8 +7,9 @@ import { Figure } from './Figure';
 import type { Source } from '@/lib/types';
 
 export function MeBubble({ text }: { text: string }) {
-
   const C = useTheme();
+  const scale = useTextScale();
+  const rf = useReadingFont();
   return (
     <View
       style={{
@@ -21,7 +22,7 @@ export function MeBubble({ text }: { text: string }) {
         maxWidth: '85%',
       }}
     >
-      <T style={{ color: '#fff', fontSize: 14, lineHeight: 20, fontWeight: '500' }}>{text}</T>
+      <T style={{ fontFamily: bodyFont(rf), color: '#fff', fontSize: Math.round(14 * scale), lineHeight: Math.round(20 * scale), fontWeight: '500' }}>{text}</T>
     </View>
   );
 }

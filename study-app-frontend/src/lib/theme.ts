@@ -97,23 +97,51 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 // Text-size override for the whole app. 1.0 = the default sizes baked
 // into T variants; 1.18 = "larger text" mode. The T component multiplies
 // every variant's fontSize / lineHeight / paddingBottom by this scale.
-// Two levels keeps the toggle simple — on/off — while still making a
-// visible difference on small screens.
 export const TEXT_SCALE_DEFAULT = 1.0;
-export const TEXT_SCALE_LARGE = 1.18;
+export const TEXT_SCALE_LARGE = 1.18;  // kept for any legacy reference
+
+// User-selectable reading size. Multiplies every T variant's fontSize /
+// lineHeight (and MD / WebView / Button sizes) so the choice affects all text.
+export type TextSize = 'small' | 'default' | 'large' | 'xl';
+export const TEXT_SCALES: Record<TextSize, number> = {
+  small: 0.9, default: 1.0, large: 1.18, xl: 1.34,
+};
+export const TEXT_SIZE_LABEL: Record<TextSize, string> = {
+  small: 'Small', default: 'Default', large: 'Large', xl: 'Extra large',
+};
+
+// User-selectable reading font for body / reading text (headings keep Kalam).
+//  - system:  the platform default sans
+//  - serif:   the platform serif
+//  - legible: Atkinson Hyperlegible, designed for low-vision / dyslexia
+export type ReadingFont = 'system' | 'serif' | 'legible';
+export const READING_FONT_LABEL: Record<ReadingFont, string> = {
+  system: 'Default', serif: 'Serif', legible: 'Legible',
+};
+export function bodyFont(font: ReadingFont, bold = false): string | undefined {
+  if (font === 'serif') return 'serif';
+  if (font === 'legible') return bold ? 'AtkinsonHyperlegible_700Bold' : 'AtkinsonHyperlegible_400Regular';
+  return undefined; // system default
+}
 
 type ThemeCtx = {
   colors: Palette;
   mode: ThemeMode;
   resolved: 'light' | 'dark';
   setMode: (m: ThemeMode) => void;
-  largerText: boolean;
+  largerText: boolean;            // derived (textScale > 1); kept for layout code
   setLargerText: (v: boolean) => void;
+  textSize: TextSize;
+  setTextSize: (s: TextSize) => void;
   textScale: number;
+  readingFont: ReadingFont;
+  setReadingFont: (f: ReadingFont) => void;
 };
 
 const STORAGE_KEY = 'studae.themeMode';
-const TEXT_KEY = 'studae.largerText';
+const TEXT_KEY = 'studae.largerText';   // legacy on/off; migrated to size
+const SIZE_KEY = 'studae.textSize';
+const FONT_KEY = 'studae.readingFont';
 
 const Ctx = createContext<ThemeCtx>({
   colors: LIGHT,
@@ -122,7 +150,11 @@ const Ctx = createContext<ThemeCtx>({
   setMode: () => {},
   largerText: false,
   setLargerText: () => {},
+  textSize: 'default',
+  setTextSize: () => {},
   textScale: TEXT_SCALE_DEFAULT,
+  readingFont: 'system',
+  setReadingFont: () => {},
 });
 
 export function useTheme(): Palette {
@@ -138,19 +170,29 @@ export function useTextScale(): number {
   return useContext(Ctx).textScale;
 }
 
+// The current reading font for body text. Headings keep Kalam.
+export function useReadingFont(): ReadingFont {
+  return useContext(Ctx).readingFont;
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const system = useColorScheme();
   const [mode, setModeState] = useState<ThemeMode>('system');
-  const [largerText, setLargerTextState] = useState(false);
+  const [textSize, setTextSizeState] = useState<TextSize>('default');
+  const [readingFont, setReadingFontState] = useState<ReadingFont>('system');
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     Promise.all([
       AsyncStorage.getItem(STORAGE_KEY),
+      AsyncStorage.getItem(SIZE_KEY),
+      AsyncStorage.getItem(FONT_KEY),
       AsyncStorage.getItem(TEXT_KEY),
-    ]).then(([m, t]) => {
+    ]).then(([m, sz, f, legacy]) => {
       if (m === 'light' || m === 'dark' || m === 'system') setModeState(m);
-      if (t === '1') setLargerTextState(true);
+      if (sz && sz in TEXT_SCALES) setTextSizeState(sz as TextSize);
+      else if (legacy === '1') setTextSizeState('large');  // migrate old on/off
+      if (f === 'system' || f === 'serif' || f === 'legible') setReadingFontState(f);
       setHydrated(true);
     });
   }, []);
@@ -159,16 +201,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setModeState(m);
     AsyncStorage.setItem(STORAGE_KEY, m).catch(() => {});
   }
-  function setLargerText(v: boolean) {
-    setLargerTextState(v);
-    AsyncStorage.setItem(TEXT_KEY, v ? '1' : '0').catch(() => {});
+  function setTextSize(s: TextSize) {
+    setTextSizeState(s);
+    AsyncStorage.setItem(SIZE_KEY, s).catch(() => {});
   }
+  function setReadingFont(f: ReadingFont) {
+    setReadingFontState(f);
+    AsyncStorage.setItem(FONT_KEY, f).catch(() => {});
+  }
+  // Back-compat: legacy callers of setLargerText map onto the size scale.
+  function setLargerText(v: boolean) { setTextSize(v ? 'large' : 'default'); }
 
   const resolved: 'light' | 'dark' = mode === 'system'
     ? (system === 'dark' ? 'dark' : 'light')
     : mode;
   const colors = resolved === 'dark' ? DARK : LIGHT;
-  const textScale = largerText ? TEXT_SCALE_LARGE : TEXT_SCALE_DEFAULT;
+  const textScale = TEXT_SCALES[textSize] ?? TEXT_SCALE_DEFAULT;
+  const largerText = textScale > 1.0;
 
   // Set the native window background so the OS doesn't paint a white frame
   // during stack transitions (e.g. when the user presses the phone's back
@@ -185,7 +234,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     {
       value: {
         colors, mode, resolved, setMode,
-        largerText, setLargerText, textScale,
+        largerText, setLargerText, textSize, setTextSize, textScale,
+        readingFont, setReadingFont,
       },
     },
     children,

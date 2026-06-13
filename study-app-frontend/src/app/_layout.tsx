@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { Caveat_600SemiBold, Caveat_700Bold } from '@expo-google-fonts/caveat';
 import { Kalam_400Regular, Kalam_700Bold } from '@expo-google-fonts/kalam';
+import { AtkinsonHyperlegible_400Regular, AtkinsonHyperlegible_700Bold } from '@expo-google-fonts/atkinson-hyperlegible';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ApiError } from '@/lib/api';
 import { AuthProvider, Loading, useAuth } from '@/components/AuthProvider';
@@ -93,6 +94,8 @@ export default function Root() {
     Caveat_700Bold,
     Kalam_400Regular,
     Kalam_700Bold,
+    AtkinsonHyperlegible_400Regular,
+    AtkinsonHyperlegible_700Bold,
   });
   if (!fontsLoaded) return <Loading />;
   return (

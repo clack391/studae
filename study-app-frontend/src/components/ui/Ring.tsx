@@ -1,13 +1,18 @@
 import { Text, View } from 'react-native';
 import Svg, { Circle, G } from 'react-native-svg';
-import { useTheme } from '@/lib/theme';
+import { useTextScale, useTheme } from '@/lib/theme';
 /**
  * Donut progress ring. The number in the center renders with the platform's
- * system bold font in a fixed-height container — Caveat's metrics on Android
+ * system bold font in a fixed-height container, Caveat's metrics on Android
  * clip the glyph bottoms at small sizes.
+ *
+ * The whole ring scales with the reading size so the center number grows
+ * proportionally and never overflows the circle.
  */
-export function Ring({ pct, label, sub, size = 74 }: { pct: number; label: string; sub?: string; size?: number }) {
+export function Ring({ pct, label, sub, size: sizeProp = 74 }: { pct: number; label: string; sub?: string; size?: number }) {
   const C = useTheme();
+  const scale = useTextScale();
+  const size = Math.round(sizeProp * scale);
   const r = size / 2 - 4;
   const c = 2 * Math.PI * r;
   const dash = (Math.max(0, Math.min(100, pct)) / 100) * c;
@@ -41,7 +46,7 @@ export function Ring({ pct, label, sub, size = 74 }: { pct: number; label: strin
           {label}
         </Text>
         {sub ? (
-          <Text style={{ fontSize: 10, color: C.ink2, fontWeight: '600', marginTop: 1 }}>{sub}</Text>
+          <Text style={{ fontSize: Math.round(10 * scale), color: C.ink2, fontWeight: '600', marginTop: 1 }}>{sub}</Text>
         ) : null}
       </View>
     </View>

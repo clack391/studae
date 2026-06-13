@@ -1,10 +1,12 @@
 import { TextInput, TextInputProps, View, ViewStyle } from 'react-native';
-import { F, R, useTheme } from '@/lib/theme';
+import { bodyFont, F, R, useReadingFont, useTextScale, useTheme } from '@/lib/theme';
 import { T } from './T';
 
 export function Field({ label, multiline, style, ...rest }: TextInputProps & { label?: string; multiline?: boolean }) {
 
   const C = useTheme();
+  const scale = useTextScale();
+  const rf = useReadingFont();
   const box: ViewStyle = {
     borderWidth: 2,
     borderColor: C.line,
@@ -22,7 +24,7 @@ export function Field({ label, multiline, style, ...rest }: TextInputProps & { l
         multiline={multiline}
         textAlignVertical={multiline ? 'top' : 'center'}
         {...rest}
-        style={[box, { fontSize: 13, color: C.ink, fontFamily: F.note }, style]}
+        style={[box, { fontSize: Math.round(13 * scale), color: C.ink, fontFamily: bodyFont(rf) ?? F.note }, style]}
       />
     </View>
   );

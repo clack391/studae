@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { WebView } from 'react-native-webview';
-import { useTheme, useThemeMode } from '@/lib/theme';
+import { ReadingFont, useReadingFont, useTextScale, useTheme, useThemeMode } from '@/lib/theme';
 
 // Renders markdown that the native renderer (react-native-markdown-display in
 // MD.tsx) cannot: LaTeX/chemistry math AND Mermaid diagrams. Pipeline inside a
@@ -17,8 +17,23 @@ const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
 
 const MERMAID_RE = /```mermaid/;
 
-function buildHtml(md: string, C: ReturnType<typeof useTheme>, fontPx: number, isDark: boolean): string {
+// Body font for the WebView, matching the app's reading-font setting. Headings
+// stay Kalam (set in the CSS below). Legible pulls Atkinson Hyperlegible from
+// Google Fonts (the RN side uses the bundled family instead).
+function bodyFontCss(rf: ReadingFont): string {
+  if (rf === 'serif') return "Georgia,'Times New Roman',serif";
+  if (rf === 'legible') return "'Atkinson Hyperlegible',-apple-system,Roboto,sans-serif";
+  return "-apple-system,Roboto,'Segoe UI',sans-serif";
+}
+
+function buildHtml(
+  md: string, C: ReturnType<typeof useTheme>, fontPx: number, isDark: boolean, rf: ReadingFont,
+): string {
   const src = JSON.stringify(md);
+  const bodyCss = bodyFontCss(rf);
+  const atkinsonImport = rf === 'legible'
+    ? "@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap');"
+    : '';
   const wantsMermaid = MERMAID_RE.test(md);
   const mermaidScript = wantsMermaid ? `<script src="${MERMAID}"></script>` : '';
   // Mermaid setup + run, only emitted when a diagram is present. Converts the
@@ -45,9 +60,10 @@ function buildHtml(md: string, C: ReturnType<typeof useTheme>, fontPx: number, i
 <link rel="stylesheet" href="${KATEX}/katex.min.css">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Kalam:wght@700&display=swap');
+  ${atkinsonImport}
   html,body{margin:0;padding:0;background:transparent;-webkit-text-size-adjust:100%;}
-  #c{color:${C.ink};font-size:${fontPx}px;line-height:24px;
-     font-family:-apple-system,Roboto,'Segoe UI',sans-serif;
+  #c{color:${C.ink};font-size:${fontPx}px;line-height:1.6;
+     font-family:${bodyCss};
      word-wrap:break-word;overflow-wrap:break-word;}
   #c p{margin:0 0 12px;}
   #c h1,#c h2,#c h3,#c h4{font-family:'Kalam',cursive;color:${C.ink};
@@ -126,10 +142,12 @@ export function MathHTML({
 }) {
   const C = useTheme();
   const { resolved } = useThemeMode();
+  const scale = useTextScale();
+  const rf = useReadingFont();
   const [height, setHeight] = useState(40);
   const html = useMemo(
-    () => buildHtml(children, C, fontPx, resolved === 'dark'),
-    [children, C, fontPx, resolved],
+    () => buildHtml(children, C, Math.round(fontPx * scale), resolved === 'dark', rf),
+    [children, C, fontPx, scale, resolved, rf],
   );
   return (
     <WebView

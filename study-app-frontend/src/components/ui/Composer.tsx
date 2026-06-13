@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@/lib/theme';
+import { bodyFont, useReadingFont, useTextScale, useTheme } from '@/lib/theme';
 export function Composer({
   onSend, onPhoto, placeholder = 'Ask about your material…', disabled, sending,
 }: {
@@ -16,6 +16,8 @@ export function Composer({
   sending?: boolean;
 }) {
   const C = useTheme();
+  const scale = useTextScale();
+  const rf = useReadingFont();
   const [text, setText] = useState('');
   const sendBlocked = !!disabled || !!sending;
 
@@ -63,8 +65,9 @@ export function Composer({
           borderRadius: 20,
           paddingVertical: 9,
           paddingHorizontal: 14,
-          fontSize: 13,
+          fontSize: Math.round(13 * scale),
           color: C.ink,
+          fontFamily: bodyFont(rf),
         }}
       />
       <Pressable

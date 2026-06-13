@@ -1,5 +1,5 @@
 import { Pressable, View } from 'react-native';
-import { F, useTheme } from '@/lib/theme';
+import { bodyFont, F, useReadingFont, useTextScale, useTheme } from '@/lib/theme';
 import { T } from './T';
 import { MathHTML } from './MathHTML';
 import { hasMath } from './MD';
@@ -12,6 +12,8 @@ export function MCQ({ letter, text, selected, state, onPress }: {
   onPress?: () => void;
 }) {
   const C = useTheme();
+  const scale = useTextScale();
+  const rf = useReadingFont();
   let border = C.line;
   let bg = C.card;
   let bubbleBg: string = 'transparent';
@@ -51,7 +53,7 @@ export function MCQ({ letter, text, selected, state, onPress }: {
           <MathHTML fontPx={13} interactive={false}>{text}</MathHTML>
         </View>
       ) : (
-        <T style={{ flex: 1, fontSize: 13, color: C.ink, lineHeight: 17 }}>{text}</T>
+        <T style={{ flex: 1, fontFamily: bodyFont(rf), fontSize: Math.round(13 * scale), color: C.ink, lineHeight: Math.round(17 * scale) }}>{text}</T>
       )}
     </Pressable>
   );

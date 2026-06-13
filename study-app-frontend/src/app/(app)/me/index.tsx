@@ -17,7 +17,7 @@ import { api } from '@/lib/api';
 import { getTtsVoice, setTtsVoice } from '@/lib/tts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/components/AuthProvider';
-import { useTheme, useThemeMode, type ThemeMode } from '@/lib/theme';
+import { READING_FONT_LABEL, TEXT_SIZE_LABEL, useTheme, useThemeMode, type ThemeMode } from '@/lib/theme';
 import type { Level } from '@/lib/types';
 
 function cap(s?: string | null) {
@@ -80,7 +80,7 @@ export default function Me() {
   const router = useRouter();
   const qc = useQueryClient();
   const { session } = useAuth();
-  const { mode, setMode, largerText, setLargerText } = useThemeMode();
+  const { mode, setMode, textSize, readingFont } = useThemeMode();
   const access = useQuery({ queryKey: ['access'], queryFn: () => api.meAccess() });
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: () => api.dashboard() });
   useFocusEffect(useCallback(() => { access.refetch(); dash.refetch(); }, []));
@@ -201,13 +201,21 @@ export default function Me() {
         </Card>
 
         <Card kind="soft" flat>
-          <Row>
-            <Col gap={2} style={{ flex: 1 }}>
-              <T v="bodyB">Larger text</T>
-              <T v="mut">Increase reading size</T>
-            </Col>
-            <TtsToggle on={largerText} onChange={setLargerText} />
-          </Row>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Reading text size and font"
+            onPress={() => router.push('/reading')}
+          >
+            <Row>
+              <Col gap={2} style={{ flex: 1 }}>
+                <Row gap={6}>
+                  <T v="bodyB">Reading text</T>
+                  <Ionicons name="chevron-forward" size={14} color={C.ink3} />
+                </Row>
+                <T v="mut">{TEXT_SIZE_LABEL[textSize]} · {READING_FONT_LABEL[readingFont]} font</T>
+              </Col>
+            </Row>
+          </Pressable>
         </Card>
 
         <Pressable

@@ -1,5 +1,5 @@
 import { Pressable, ViewStyle, StyleProp, TextStyle } from 'react-native';
-import { F, R, useTheme } from '@/lib/theme';
+import { F, R, useTextScale, useTheme } from '@/lib/theme';
 import { T } from './T';
 
 type Kind = 'pri' | 'soft' | 'ghost' | 'dark' | 'plain';
@@ -18,6 +18,7 @@ export function Button({
   leftIcon?: React.ReactNode;
 }) {
   const C = useTheme();
+  const scale = useTextScale();
   const dims =
     size === 'lg' ? { padV: 13, padH: 18, fs: 22, br: R.lg }
     : size === 'sm' ? { padV: 6, padH: 12, fs: 16, br: 9 }
@@ -47,11 +48,12 @@ export function Button({
   // tall glyphs clip at the top (the same recipe the T hand variants use in
   // theme.ts). A tight lineHeight here was cutting the tops of button labels,
   // which read as the text "fading" into the fill.
+  const fs = Math.round(dims.fs * scale);
   const txtStyle: TextStyle = {
     fontFamily: F.hand,
-    fontSize: dims.fs,
+    fontSize: fs,
     color: txtColor,
-    lineHeight: Math.round(dims.fs * 1.4),
+    lineHeight: Math.round(fs * 1.4),
     paddingBottom: 2,
     // Bound the text width inside the row so a long label shrinks to fit on
     // one line (see numberOfLines + adjustsFontSizeToFit below) instead of

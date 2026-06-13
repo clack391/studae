@@ -1,5 +1,5 @@
 import { Text, View } from 'react-native';
-import { F, useTheme } from '@/lib/theme';
+import { F, useTextScale, useTheme } from '@/lib/theme';
 import { T } from './T';
 
 export function Bar({ pct, color }: { pct: number; color?: string }) {
@@ -15,14 +15,17 @@ export function Bar({ pct, color }: { pct: number; color?: string }) {
 export function Stat({ big, small }: { big: string; small: string }) {
 
   const C = useTheme();
+  const scale = useTextScale();
+  const s = (n: number) => Math.round(n * scale);
   return (
     <View style={{ alignItems: 'center', minWidth: 60 }}>
-      {/* Raw RNText + system bold + fixed-height container — no font-specific
-          metric tricks. Worked around persistent Caveat clipping on Android. */}
-      <View style={{ height: 36, justifyContent: 'center' }}>
+      {/* Raw RNText + system bold + fixed-height container, no font-specific
+          metric tricks. Worked around persistent Caveat clipping on Android.
+          Height scales with the reading size so the number never clips. */}
+      <View style={{ height: s(36), justifyContent: 'center' }}>
         <Text
           style={{
-            fontSize: 28,
+            fontSize: s(28),
             fontWeight: '800',
             color: C.ink,
             letterSpacing: 0.3,
@@ -35,7 +38,7 @@ export function Stat({ big, small }: { big: string; small: string }) {
       <Text
         style={{
           fontFamily: F.note,
-          fontSize: 11,
+          fontSize: s(11),
           color: C.ink2,
           marginTop: 2,
         }}
