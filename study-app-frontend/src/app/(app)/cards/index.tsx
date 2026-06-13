@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, View } from 'react-native';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,7 +7,6 @@ import { Screen } from '@/components/ui/Screen';
 import { AppBar } from '@/components/ui/AppBar';
 import { Card, Col, Row } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Chip } from '@/components/ui/Segmented';
 import { Stat } from '@/components/ui/Bar';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { T } from '@/components/ui/T';
@@ -15,7 +14,7 @@ import { api } from '@/lib/api';
 import { on402 } from '@/lib/upgrade';
 import { AIThinking } from '@/components/ui/Pulse';
 import { IndeterminateBar } from '@/components/ui/IndeterminateBar';
-import { useTheme } from '@/lib/theme';
+import { F, useTheme } from '@/lib/theme';
 import type { Flashcard } from '@/lib/types';
 
 function isMastered(c: Flashcard): boolean {
@@ -116,11 +115,49 @@ export default function CardsHome() {
       <AppBar title="Cards" />
       <Screen refreshing={cards.isRefetching} onRefresh={() => { cards.refetch(); due.refetch(); }}>
         {readyDocs.length > 1 && !focusAreaId ? (
-          <Row wrap gap={6}>
-            {readyDocs.map((d) => (
-              <Chip key={d.id} label={d.title.length > 20 ? d.title.slice(0, 20) + '…' : d.title} on={d.id === docId} onPress={() => setDocId(d.id)} />
-            ))}
-          </Row>
+          <Col gap={8}>
+            <T v="label">Deck</T>
+            {/* One tidy horizontal strip that scrolls, instead of a wrapping
+                cloud of mismatched pills. Each pill is single-line + ellipsised
+                so long document titles never blow up the layout. */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 8, paddingRight: 4 }}
+            >
+              {readyDocs.map((d) => {
+                const on = d.id === docId;
+                return (
+                  <Pressable
+                    key={d.id}
+                    onPress={() => setDocId(d.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                    accessibilityLabel={d.title}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      borderWidth: 1.6,
+                      borderColor: on ? C.accent : C.line,
+                      backgroundColor: on ? C.accentSoft : C.card,
+                      borderRadius: 22,
+                      paddingVertical: 7,
+                      paddingHorizontal: 13,
+                    }}
+                  >
+                    <Ionicons name="albums-outline" size={14} color={on ? C.accentInk : C.ink3} />
+                    <T
+                      numberOfLines={1}
+                      style={{ fontFamily: F.note, fontSize: 13, maxWidth: 150, color: on ? C.accentInk : C.ink2, fontWeight: on ? '700' : '400' }}
+                    >
+                      {d.title}
+                    </T>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </Col>
         ) : null}
 
         {focus.data ? (
@@ -135,11 +172,17 @@ export default function CardsHome() {
           </Card>
         ) : null}
 
-        <Row between gap={20}>
-          <Stat big={String(list.length)} small="cards" />
-          <Stat big={String(dueCount)} small="due now" />
-          <Stat big={String(mastered)} small="mastered" />
-        </Row>
+        {/* Stats grouped into one panel with hairline dividers so they read as
+            a single unit instead of three numbers floating on the page. */}
+        <Card kind="soft" flat>
+          <Row gap={0}>
+            <View style={{ flex: 1 }}><Stat big={String(list.length)} small="cards" /></View>
+            <View style={{ width: 1.5, alignSelf: 'stretch', backgroundColor: C.line, opacity: 0.5, marginVertical: 4 }} />
+            <View style={{ flex: 1 }}><Stat big={String(dueCount)} small="due now" /></View>
+            <View style={{ width: 1.5, alignSelf: 'stretch', backgroundColor: C.line, opacity: 0.5, marginVertical: 4 }} />
+            <View style={{ flex: 1 }}><Stat big={String(mastered)} small="mastered" /></View>
+          </Row>
+        </Card>
 
         {dueCount > 0 ? (
           <Button
@@ -148,18 +191,18 @@ export default function CardsHome() {
             block
             onPress={() => router.push({ pathname: '/(app)/cards/review', params: { documentId: docId! } })}
           />
-        ) : (
+        ) : list.length > 0 ? (
           <Card kind="accent" flat>
             <Row>
               <Ionicons name="checkmark-circle" size={18} color={C.accent} />
               <T v="small" style={{ flex: 1 }}>All caught up. No cards are due right now.</T>
             </Row>
           </Card>
-        )}
+        ) : null}
 
         <Button
           label={generate.isPending ? 'Generating…' : list.length ? 'Generate more cards' : 'Generate your first cards'}
-          kind="soft"
+          kind={list.length ? 'soft' : 'pri'}
           block
           onPress={() => generate.mutate()}
           disabled={generate.isPending}
@@ -178,6 +221,8 @@ export default function CardsHome() {
             />
           </>
         ) : null}
+
+        {list.length ? <T v="label" style={{ marginTop: 6 }}>Your cards</T> : null}
 
         {list.map((c) => {
           const m = isMastered(c);

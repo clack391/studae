@@ -54,7 +54,7 @@ export function Chip({ label, on, onPress }: { label: string; on?: boolean; onPr
         paddingHorizontal: 11,
       }}
     >
-      <T style={{ fontFamily: F.note, fontSize: 13, color: on ? C.accentInk : C.ink2, fontWeight: on ? '700' : '400' }}>{label}</T>
+      <T numberOfLines={1} style={{ fontFamily: F.note, fontSize: 13, color: on ? C.accentInk : C.ink2, fontWeight: on ? '700' : '400' }}>{label}</T>
     </Pressable>
   );
 }
